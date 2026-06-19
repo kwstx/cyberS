@@ -1,0 +1,86 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlabels
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLabels
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredlabels
+
+        violation[{"msg": msg, "details": {"missing_labels": missing}}] {
+          provided := {label | input.review.object.metadata.labels[label]}
+          required := {label | label := input.parameters.labels[_]}
+          missing := required - provided
+          count(missing) > 0
+          msg := sprintf("You must provide labels: %v", [missing])
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredLabels
+metadata:
+  name: ns-must-inject-istio
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Namespace"]
+  parameters:
+    labels: ["istio-injection"]
+---
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sallowedregistries
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sAllowedRegistries
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            registries:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sallowedregistries
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.template.spec.containers[_]
+          image := container.image
+          satisfied := [good | repo := input.parameters.registries[_]; startswith(image, repo)]
+          not any(satisfied)
+          msg := sprintf("Container image '%v' is not from an approved registry: %v", [image, input.parameters.registries])
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sAllowedRegistries
+metadata:
+  name: force-secure-registries
+spec:
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment", "DaemonSet", "StatefulSet"]
+  parameters:
+    registries:
+      - "registry.sovereign.local/"
+      - "docker.io/library/neo4j" # Allow official Neo4j image
+      - "darip/" # Allow local darip images

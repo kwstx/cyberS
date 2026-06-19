@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY crypto_pqc.py .
+COPY agentic_execution/ agentic_execution/
+
+EXPOSE 8004
+
+ENV PYTHONPATH=/app
+
+CMD ["uvicorn", "agentic_execution.agent_service:app", "--host", "0.0.0.0", "--port", "8004"]
