@@ -1,7 +1,7 @@
 import json
 import logging
 import asyncio
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime, timezone
 
 import numpy as np

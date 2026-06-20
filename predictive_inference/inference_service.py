@@ -169,8 +169,8 @@ async def predict_vendor_risk(req: PredictionRequest):
     if fusion_engine is not None:
         with torch.no_grad():
             preds = fusion_engine(node_features, edge_index, text_data, time_series)
-            base_risk = preds["composite_risk_score"]
-            cascade_prob = preds["vulnerability_cascade_probability"]
+            base_risk = preds["composite_risk_score_val"]
+            cascade_prob = preds["vulnerability_cascade_probability_val"]
     else:
         # Fallback heuristics
         cascade_prob = 0.05 + (0.05 * min(vendor_count, 8)) + (0.15 * min(active_cves_count, 4))

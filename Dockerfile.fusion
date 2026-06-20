@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY crypto_pqc.py .
+COPY core/ core/
 COPY semantic_fusion/ semantic_fusion/
 
 EXPOSE 8002

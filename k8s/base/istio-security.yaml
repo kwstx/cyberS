@@ -1,0 +1,117 @@
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: darip
+spec:
+  # Enforce mutual TLS (mTLS) for all inter-service traffic in the fabric
+  mtls:
+    mode: STRICT
+---
+# Deny all inter-service access by default in the namespace
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all-by-default
+  namespace: darip
+spec:
+  {}
+---
+# Allow all services to request tokens and check authorization from Governance
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-governance-access
+  namespace: darip
+spec:
+  selector:
+    matchLabels:
+      app: darip-governance
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/darip/sa/*"]
+    to:
+    - operation:
+        methods: ["GET", "POST"]
+        paths: ["/health", "/keys", "/token", "/authorize"]
+---
+# Ingestion Layer is allowed to call Fusion Layer
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-ingest-to-fusion
+  namespace: darip
+spec:
+  selector:
+    matchLabels:
+      app: darip-semantic-fusion
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/darip/sa/darip-data-ingestion-sa"]
+    to:
+    - operation:
+        methods: ["POST"]
+        paths: ["/fuse"]
+---
+# Fusion Layer is allowed to write to Neo4j
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-fusion-to-graph
+  namespace: darip
+spec:
+  selector:
+    matchLabels:
+      app: darip-graph-db
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/darip/sa/darip-semantic-fusion-sa"]
+    to:
+    - operation:
+        ports: ["7687"] # Bolt protocol port
+---
+# Inference Layer is allowed to query Fusion Subgraphs
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-inference-to-subgraph
+  namespace: darip
+spec:
+  selector:
+    matchLabels:
+      app: darip-semantic-fusion
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/darip/sa/darip-predictive-inference-sa"]
+    to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/subgraph/*"]
+---
+# Agentic Layer is allowed to query Inference predictions
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-agent-to-inference
+  namespace: darip
+spec:
+  selector:
+    matchLabels:
+      app: darip-predictive-inference
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/darip/sa/darip-agentic-execution-sa"]
+    to:
+    - operation:
+        methods: ["POST"]
+        paths: ["/predict"]

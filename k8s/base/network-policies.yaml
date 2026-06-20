@@ -1,0 +1,215 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-all-default
+  namespace: darip
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-governance
+  namespace: darip
+spec:
+  podSelector:
+    matchLabels:
+      app: darip-governance
+  ingress:
+  - from:
+    - podSelector: {} # Allow all pods in the same namespace to contact governance
+    ports:
+    - protocol: TCP
+      port: 8001
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api
+  namespace: darip
+spec:
+  podSelector:
+    matchLabels:
+      app: darip-api
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: 8000 # Allow external traffic to API
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darip-governance
+    ports:
+    - protocol: TCP
+      port: 8001
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-data-ingestion
+  namespace: darip
+spec:
+  podSelector:
+    matchLabels:
+      app: darip-data-ingestion
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darip-api
+    ports:
+    - protocol: TCP
+      port: 8000
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darip-semantic-fusion
+    ports:
+    - protocol: TCP
+      port: 8002
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darip-governance
+    ports:
+    - protocol: TCP
+      port: 8001
+  # Also egress for Kafka connection (we allow to kubernetes external/core-dns/etc)
+  - ports:
+    - protocol: TCP
+      port: 9092
+  - ports:
+    - protocol: UDP
+      port: 53
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-semantic-fusion
+  namespace: darip
+spec:
+  podSelector:
+    matchLabels:
+      app: darip-semantic-fusion
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darip-data-ingestion
+    ports:
+    - protocol: TCP
+      port: 8002
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darip-predictive-inference
+    ports:
+    - protocol: TCP
+      port: 8002
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darip-graph-db
+    ports:
+    - protocol: TCP
+      port: 7687
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-predictive-inference
+  namespace: darip
+spec:
+  podSelector:
+    matchLabels:
+      app: darip-predictive-inference
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darip-agentic-execution
+    ports:
+    - protocol: TCP
+      port: 8003
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darip-semantic-fusion
+    ports:
+    - protocol: TCP
+      port: 8002
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darip-governance
+    ports:
+    - protocol: TCP
+      port: 8001
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agentic-execution
+  namespace: darip
+spec:
+  podSelector:
+    matchLabels:
+      app: darip-agentic-execution
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darip-predictive-inference
+    ports:
+    - protocol: TCP
+      port: 8003
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darip-governance
+    ports:
+    - protocol: TCP
+      port: 8001
+  policyTypes:
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-graph-db
+  namespace: darip
+spec:
+  podSelector:
+    matchLabels:
+      app: darip-graph-db
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darip-semantic-fusion
+    ports:
+    - protocol: TCP
+      port: 7687
+  policyTypes:
+  - Ingress

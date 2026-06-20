@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: darip-graph-db
+  namespace: darip
+spec:
+  template:
+    spec:
+      nodeSelector:
+        environment: sovereign-cloud
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: darip-data-ingestion
+  namespace: darip
+spec:
+  template:
+    spec:
+      nodeSelector:
+        environment: sovereign-cloud
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: darip-semantic-fusion
+  namespace: darip
+spec:
+  template:
+    spec:
+      nodeSelector:
+        environment: sovereign-cloud
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: darip-agentic-execution
+  namespace: darip
+spec:
+  template:
+    spec:
+      nodeSelector:
+        environment: sovereign-cloud
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: darip-governance
+  namespace: darip
+spec:
+  template:
+    spec:
+      nodeSelector:
+        environment: sovereign-cloud
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: darip-predictive-inference
+  namespace: darip
+spec:
+  template:
+    spec:
+      nodeSelector:
+        environment: public-cloud

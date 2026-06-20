@@ -154,7 +154,7 @@ class MultiModalFusionEngine(nn.Module):
             nn.Sigmoid() # Outputs 0.0 to 1.0
         )
 
-    def forward(self, node_features: torch.Tensor, edge_index: torch.Tensor, text_data: List[str], time_series: torch.Tensor):
+    def forward(self, node_features: torch.Tensor, edge_index: torch.Tensor, text_data: List[str], time_series: torch.Tensor, return_latent: bool=False):
         # 1. Structural Embedding
         g_embed = self.gnn(node_features, edge_index) # [1, gnn_out]
         
@@ -168,11 +168,43 @@ class MultiModalFusionEngine(nn.Module):
         fused_embed = torch.cat([g_embed, t_embed, ts_embed], dim=1) # [1, fusion_dim]
         fusion_out = self.fusion_mlp(fused_embed) # [1, 32]
         
+        if return_latent:
+            return fusion_out
+            
         # 5. Output metrics
         risk_score_raw = self.risk_score_head(fusion_out) # [1, 1]
         cascade_prob_raw = self.cascade_prob_head(fusion_out) # [1, 1]
         
         return {
-            "composite_risk_score": risk_score_raw.item() * 100.0, # Scale to 0-100
-            "vulnerability_cascade_probability": cascade_prob_raw.item()
+            "composite_risk_score": risk_score_raw * 100.0, # Scale to 0-100 (tensor)
+            "vulnerability_cascade_probability": cascade_prob_raw, # tensor
+            "composite_risk_score_val": risk_score_raw.item() * 100.0 if not self.training else None,
+            "vulnerability_cascade_probability_val": cascade_prob_raw.item() if not self.training else None
+        }
+
+class MultiModalEnsemble(nn.Module):
+    """
+    Wrapper for an ensemble of MultiModalFusionEngines.
+    """
+    def __init__(self, models: List[MultiModalFusionEngine]):
+        super(MultiModalEnsemble, self).__init__()
+        self.models = nn.ModuleList(models)
+        
+    def forward(self, node_features, edge_index, text_data, time_series):
+        risk_scores = []
+        cascade_probs = []
+        for model in self.models:
+            preds = model(node_features, edge_index, text_data, time_series)
+            risk_scores.append(preds["composite_risk_score"])
+            cascade_probs.append(preds["vulnerability_cascade_probability"])
+            
+        # Average the predictions
+        avg_risk_score = torch.mean(torch.stack(risk_scores))
+        avg_cascade_prob = torch.mean(torch.stack(cascade_probs))
+        
+        return {
+            "composite_risk_score": avg_risk_score,
+            "vulnerability_cascade_probability": avg_cascade_prob,
+            "composite_risk_score_val": avg_risk_score.item() if not self.training else None,
+            "vulnerability_cascade_probability_val": avg_cascade_prob.item() if not self.training else None
         }

@@ -8,21 +8,41 @@ class EnrichmentPipeline:
     def __init__(self):
         # In a real scenario, this would use API keys to contact external providers
         self.mock_providers = ["SecurityScorecard", "BitSight"]
+        self.cache = {}
 
     async def fetch_external_rating(self, entity_name: str) -> Dict[str, Any]:
         """
-        Mocks a call to an external rating provider.
+        Mocks a call to an external rating provider, with graceful degradation.
         """
-        # Simulated delay for API call
-        # await asyncio.sleep(0.1) 
-        import random
-        provider = random.choice(self.mock_providers)
-        score = random.randint(40, 100)
-        return {
-            "provider": provider,
-            "external_score": score,
-            "risk_tier": "Low" if score > 80 else "Medium" if score > 60 else "High"
-        }
+        try:
+            import random
+            # Simulate flaky API server connection
+            if random.random() < 0.15:
+                raise ConnectionError("External rating API timeout or unavailable")
+
+            provider = random.choice(self.mock_providers)
+            score = random.randint(40, 100)
+            rating = {
+                "provider": provider,
+                "external_score": score,
+                "risk_tier": "Low" if score > 80 else "Medium" if score > 60 else "High"
+            }
+            # Cache the fetched score
+            self.cache[entity_name] = rating
+            return rating
+        except Exception as e:
+            logger.warning(f"Failed to fetch external rating for '{entity_name}': {e}. Operating in degraded mode.")
+            # Graceful degradation fallback
+            if entity_name in self.cache:
+                logger.info(f"Using cached rating for '{entity_name}'")
+                return self.cache[entity_name]
+            else:
+                logger.info(f"Using default fallback rating for '{entity_name}'")
+                return {
+                    "provider": "DARIP-Degraded-Fallback",
+                    "external_score": 70,
+                    "risk_tier": "Medium"
+                }
 
     def compute_proprietary_risk(self, data: Dict[str, Any], external_data: Dict[str, Any]) -> float:
         """

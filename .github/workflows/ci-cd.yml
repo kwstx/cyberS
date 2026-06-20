@@ -1,0 +1,86 @@
+name: DARIP CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master, dev, staging ]
+  pull_request:
+    branches: [ main, master, dev, staging ]
+
+jobs:
+  lint-and-format:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 black
+
+    - name: Run Black formatter check
+      run: black --check .
+
+    - name: Run Flake8 linter
+      run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install Bandit
+      run: pip install bandit
+
+    - name: Run Bandit Security Scanning
+      run: bandit -r . -x ./tests,./venv,.venv --severity-level medium
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    needs: [lint-and-format, security-scan]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio
+
+    - name: Run pytest
+      run: pytest
+
+  k8s-validate:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Kustomize
+      uses: imranismail/setup-kustomize@v2
+
+    - name: Validate Development Overlay
+      run: kustomize build k8s/overlays/development > /dev/null
+
+    - name: Validate Staging Overlay
+      run: kustomize build k8s/overlays/staging > /dev/null
+
+    - name: Validate Production Overlay
+      run: kustomize build k8s/overlays/production > /dev/null
