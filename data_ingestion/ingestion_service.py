@@ -11,6 +11,9 @@ from aiokafka import AIOKafkaConsumer
 
 from crypto_pqc import PQCKeyEncapsulator, secure_json_encrypt
 from enrichment import EnrichmentPipeline
+from data_ingestion.passive.service import PassiveIngestionService
+from data_ingestion.passive.models import JobConfig, ConnectorConfig
+from data_ingestion.passive.dummy_connector import DummyConnector
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +28,10 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_TOPIC = "darip-raw-signals"
 
 enricher = EnrichmentPipeline()
+
+# Initialize Passive Ingestion Service
+passive_service = PassiveIngestionService()
+passive_service.register_connector_class("DummyConnector", DummyConnector)
 
 # Structures for ingestion
 class Component(BaseModel):
@@ -170,6 +177,11 @@ async def consume_kafka():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(consume_kafka())
+    await passive_service.start()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await passive_service.stop()
 
 @app.get("/health")
 def health():
@@ -212,6 +224,14 @@ async def ingest_signals(payload: MultiSignalPayload):
     await forward_to_fusion(normalized_data)
     
     return {"status": "success", "message": "Signal queued for fusion."}
+
+@app.post("/jobs")
+async def schedule_job(job_config: JobConfig):
+    try:
+        passive_service.schedule_job(job_config)
+        return {"status": "success", "message": f"Job {job_config.job_id} scheduled."}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
