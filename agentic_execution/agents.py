@@ -4,6 +4,7 @@ from typing import Dict, Any, List
 from langchain_core.tools import tool
 from langchain_community.chat_models import ChatOllama
 from langchain_core.messages import SystemMessage
+from agentic_execution.memory import audit_logger
 
 logger = logging.getLogger("AgenticTools")
 
@@ -29,16 +30,24 @@ def read_sbom(vendor_name: str) -> str:
 def query_subgraph_risk(vendor_name: str) -> str:
     """Queries the predictive risk intelligence service to evaluate risk footprint."""
     logger.info(f"Tool executed: query_subgraph_risk for {vendor_name}")
+    audit_logger.log_action(vendor_name, "AssessmentTool", "query_subgraph_risk")
+    
     try:
-        # Mocking the inference call as this requires the predictive inference service
-        # resp = httpx.post(f"{INFERENCE_URL}/predict", json={"vendor_name": vendor_name})
-        # data = resp.json()
+        # Mocking the inference call. High uncertainty is flagged for specific patterns.
+        is_high_risk = "highrisk" in vendor_name.lower()
+        
         data = {
-            "composite_risk_score": 85.0,
-            "risk_level": "HIGH",
-            "vulnerability_cascade_probability": 0.75
+            "composite_risk_score": 95.0 if is_high_risk else 45.0,
+            "risk_level": "CRITICAL" if is_high_risk else "LOW",
+            "vulnerability_cascade_probability": 0.95 if is_high_risk else 0.10
         }
-        return f"Risk Level: {data['risk_level']}, Score: {data['composite_risk_score']}, Cascade Prob: {data['vulnerability_cascade_probability']}"
+        
+        approval_flag = ""
+        if data['vulnerability_cascade_probability'] > 0.8:
+            approval_flag = " [HIGH_UNCERTAINTY: REQUIRES_HUMAN_APPROVAL]"
+            audit_logger.log_action(vendor_name, "PolicyEngine", "flagged_for_approval", {"reason": "High Cascade Probability"})
+            
+        return f"Risk Level: {data['risk_level']}, Score: {data['composite_risk_score']}, Cascade Prob: {data['vulnerability_cascade_probability']}{approval_flag}"
     except Exception as e:
         return f"Failed to query risk: {str(e)}"
 
@@ -74,13 +83,23 @@ def create_agent(agent_name: str, system_prompt: str, tools: list):
     
     # We will return a simple callable that simulates an agent step
     def agent_node(state: dict):
+        vendor_name = state.get("vendor_name", "unknown")
+        audit_logger.log_action(vendor_name, agent_name, "activated")
+        
         messages = state.get("messages", [])
         # Prepend system message if not present
         if not any(isinstance(m, SystemMessage) for m in messages):
             messages = [SystemMessage(content=system_prompt)] + messages
         
         response = llm_with_tools.invoke(messages)
-        return {"messages": [response], "sender": agent_name}
+        audit_logger.log_action(vendor_name, agent_name, "responded", {"content": response.content})
+        
+        # If the assessment agent identifies high uncertainty, flag state
+        requires_approval = state.get("requires_approval", False)
+        if "REQUIRES_HUMAN_APPROVAL" in response.content or "REQUIRES_HUMAN_APPROVAL" in str(state.get("messages", [])):
+            requires_approval = True
+            
+        return {"messages": [response], "sender": agent_name, "requires_approval": requires_approval}
         
     return agent_node
 

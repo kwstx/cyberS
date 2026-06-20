@@ -5,6 +5,7 @@ import logging
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
 from agentic_execution.agents import (
@@ -24,6 +25,8 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
     next: str
     vendor_name: str
+    requires_approval: bool
+    human_approved: bool
 
 # Define the supervisor routing logic
 members = ["discovery_agent", "assessment_agent", "remediation_agent", "compliance_agent"]
@@ -78,18 +81,31 @@ def supervisor_node(state: AgentState):
             next_worker = opt
             break
             
-    # Default workflow enforcement if LLM fails to output exact token
-    if next_worker == "FINISH" and len(state["messages"]) < 3:
-        # Force the flow if the LLM hallucinated FINISH too early
-        if "compliance_agent" not in str(state["messages"]):
-            next_worker = "compliance_agent"
-        elif "discovery_agent" not in str(state["messages"]):
-            next_worker = "discovery_agent"
-        elif "assessment_agent" not in str(state["messages"]):
-            next_worker = "assessment_agent"
+    # Check if approval is required
+    if state.get("requires_approval", False) and not state.get("human_approved", False):
+        next_worker = "human_approval"
+        logger.info(f"Supervisor escalating to HITL due to high uncertainty policy.")
+    else:
+        # Default workflow enforcement if LLM fails to output exact token
+        if next_worker == "FINISH" and len(state["messages"]) < 3:
+            # Force the flow if the LLM hallucinated FINISH too early
+            if "compliance_agent" not in str(state["messages"]):
+                next_worker = "compliance_agent"
+            elif "discovery_agent" not in str(state["messages"]):
+                next_worker = "discovery_agent"
+            elif "assessment_agent" not in str(state["messages"]):
+                next_worker = "assessment_agent"
 
     logger.info(f"Supervisor decided next worker: {next_worker}")
     return {"next": next_worker}
+
+def human_approval_node(state: AgentState):
+    """
+    A dummy node that LangGraph stops before. 
+    Once approved by the API, it simply passes through.
+    """
+    logger.info("Human approval gate passed.")
+    return {"human_approved": True}
 
 # Build the Graph
 workflow = StateGraph(AgentState)
@@ -100,10 +116,13 @@ workflow.add_node("discovery_agent", discovery_agent)
 workflow.add_node("assessment_agent", assessment_agent)
 workflow.add_node("remediation_agent", remediation_agent)
 workflow.add_node("compliance_agent", compliance_agent)
+workflow.add_node("human_approval", human_approval_node)
 
 # Add edges
 for member in members:
     workflow.add_edge(member, "supervisor")
+
+workflow.add_edge("human_approval", "supervisor")
 
 # The supervisor determines the next step
 workflow.add_conditional_edges(
@@ -114,28 +133,58 @@ workflow.add_conditional_edges(
         "assessment_agent": "assessment_agent",
         "remediation_agent": "remediation_agent",
         "compliance_agent": "compliance_agent",
+        "human_approval": "human_approval",
         "FINISH": END
     }
 )
 
 workflow.set_entry_point("supervisor")
 
-# Compile the graph
-orchestrator_app = workflow.compile()
+# Initialize Checkpointer
+memory_saver = MemorySaver()
+
+# Compile the graph with interrupt before human_approval
+orchestrator_app = workflow.compile(checkpointer=memory_saver, interrupt_before=["human_approval"])
 
 def run_agentic_workflow(vendor_name: str) -> dict:
     """Executes the full agentic workflow using the LangGraph orchestrator."""
     logger.info(f"Starting LangGraph multi-agent workflow for {vendor_name}")
     
+    config = {"configurable": {"thread_id": vendor_name}}
+    
+    # Check if thread already exists and is interrupted
+    state = orchestrator_app.get_state(config)
+    
+    if state and state.next and state.next[0] == "human_approval":
+        # It's waiting for approval, we shouldn't run it blindly from start.
+        return {"status": "pending_approval"}
+    
     initial_state = {
         "messages": [HumanMessage(content=f"Evaluate supply chain risk for vendor: {vendor_name}")],
-        "vendor_name": vendor_name
+        "vendor_name": vendor_name,
+        "requires_approval": False,
+        "human_approved": False
     }
     
     final_state = None
-    # We can stream the output or just run it
-    for s in orchestrator_app.stream(initial_state, config={"recursion_limit": 15}):
-        logger.info(f"Graph step completed: {list(s.keys())[0]}")
-        final_state = s
+    for s in orchestrator_app.stream(initial_state, config=config, stream_mode="values"):
+        logger.info(f"Graph step completed. Current nodes: {list(s.keys()) if isinstance(s, dict) else 'State update'}")
         
-    return final_state
+    # After stream finishes or interrupts, check state
+    current_state = orchestrator_app.get_state(config)
+    if current_state.next and current_state.next[0] == "human_approval":
+        logger.warning(f"Workflow interrupted. Awaiting HITL approval for {vendor_name}.")
+        return {"status": "pending_approval", "state": current_state.values}
+        
+    return current_state.values
+
+def approve_workflow(vendor_name: str) -> dict:
+    """Resumes the workflow after human approval."""
+    config = {"configurable": {"thread_id": vendor_name}}
+    logger.info(f"Received human approval for {vendor_name}. Resuming workflow...")
+    
+    # Resume the graph by passing None
+    for s in orchestrator_app.stream(None, config=config, stream_mode="values"):
+         logger.info(f"Graph step completed post-approval.")
+         
+    return orchestrator_app.get_state(config).values

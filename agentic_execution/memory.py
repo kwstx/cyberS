@@ -29,5 +29,31 @@ class MockVectorStore:
         # Here we just return up to k recent documents as a mock.
         return list(reversed(self.memory_store))[:k]
 
-# Global instance for the service
+class AuditLogger:
+    """
+    Maintains a robust, chronological audit trail of all agent decisions and HITL interventions 
+    for explainability and regulatory compliance.
+    """
+    def __init__(self):
+        self.trails: Dict[str, List[Dict[str, Any]]] = {}
+        logger.info("Initialized Audit Logger.")
+
+    def log_action(self, thread_id: str, actor: str, action: str, details: Dict[str, Any] = None):
+        if thread_id not in self.trails:
+            self.trails[thread_id] = []
+        
+        entry = {
+            "actor": actor,
+            "action": action,
+            "details": details or {}
+        }
+        self.trails[thread_id].append(entry)
+        logger.info(f"[AUDIT] {thread_id} | {actor} -> {action} | Details: {details}")
+
+    def get_trail(self, thread_id: str) -> List[Dict[str, Any]]:
+        return self.trails.get(thread_id, [])
+
+# Global instances for the service
 vector_store = MockVectorStore()
+audit_logger = AuditLogger()
+
