@@ -1,15 +1,17 @@
 import logging
 import asyncio
 import httpx
+import structlog
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any
+from core.observability import setup_observability
 
 # Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("AgenticExecutionService")
+logger = structlog.get_logger("AgenticExecutionService")
 
 app = FastAPI(title="DARIP Agentic Execution Service", version="1.0.0")
+setup_observability(app, "agentic_execution")
 
 GOVERNANCE_URL = "http://localhost:8001"
 FUSION_URL = "http://localhost:8002"

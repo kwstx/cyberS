@@ -1,12 +1,13 @@
 import logging
 import asyncio
+import structlog
 from typing import List, Dict, Any
 
 from storage.graph import GraphRepository
 from core.models import Asset, Exposure, AssetType, Relationship, RelationshipType
 from fusion.correlation_engine import CorrelationEngine
 
-logger = logging.getLogger("DARIP.TelemetryFusion")
+logger = structlog.get_logger("DARIP.TelemetryFusion")
 
 class TelemetryFusionService:
     """

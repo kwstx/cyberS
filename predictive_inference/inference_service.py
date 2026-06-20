@@ -1,14 +1,16 @@
 import logging
 import httpx
+import structlog
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from typing import Dict, List, Any
+from core.observability import setup_observability
 
 # Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("PredictiveInferenceService")
+logger = structlog.get_logger("PredictiveInferenceService")
 
 app = FastAPI(title="DARIP Predictive Inference Service", version="1.0.0")
+setup_observability(app, "predictive_inference")
 
 GOVERNANCE_URL = "http://localhost:8001"
 FUSION_URL = "http://localhost:8002"

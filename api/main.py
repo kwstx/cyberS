@@ -1,24 +1,22 @@
 import logging
 import time
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 
 from api.routers import assets, scans, insights, exports
 from api.events import publisher
+from core.observability import setup_observability
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("api.main")
+logger = structlog.get_logger("api.main")
 
 app = FastAPI(
     title=settings.APP_NAME,
     description="DARIP API Layer for EASM and Supply Chain Risk",
     version="1.0.0"
 )
+setup_observability(app, "api_layer")
 
 # CORS Middleware
 app.add_middleware(

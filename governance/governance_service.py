@@ -1,6 +1,8 @@
 import time
 import logging
 import base64
+import os
+import structlog
 from fastapi import FastAPI, HTTPException, Depends, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
@@ -10,12 +12,14 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
 from crypto_pqc import PQCSigner
+from core.observability import setup_observability
+from core.audit import AuditEvent
 
 # Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("GovernanceService")
+logger = structlog.get_logger("GovernanceService")
 
 app = FastAPI(title="DARIP Governance & Zero-Trust Service", version="1.0.0")
+setup_observability(app, "governance_service")
 security = HTTPBearer()
 
 # Generate asymmetric keys for standard JWT and PQC Dilithium
@@ -52,6 +56,7 @@ class AuthzRequest(BaseModel):
     src_service: Optional[str] = None
     dest_service: Optional[str] = None
     agent_task: Optional[str] = None
+    target_asset: Optional[str] = None
     pqc_token_sig: str
     token_str: str
 
@@ -108,7 +113,16 @@ def evaluate_rego_policy(input_data: Dict[str, Any]) -> tuple[bool, str]:
     """
     action = input_data.get("action")
     claims = input_data.get("token", {}).get("claims", {})
+    target = input_data.get("target_asset")
     
+    # Allow-list Policy Enforcement
+    allow_list_str = os.getenv("APPROVED_ASSET_ALLOWLIST", "")
+    if allow_list_str:
+        allow_list = [a.strip() for a in allow_list_str.split(",") if a.strip()]
+        if action == "agent_execution" and target:
+            if target not in allow_list:
+                return False, f"Target asset {target} is not in the approved allow-list."
+
     # Verify Issuer
     if claims.get("iss") != "DARIP-Governance":
         return False, "Invalid issuer claim."
@@ -211,6 +225,7 @@ def authorize_action(req: AuthzRequest):
         "src_service": req.src_service,
         "dest_service": req.dest_service,
         "agent_task": req.agent_task,
+        "target_asset": req.target_asset,
         "token": {
             "claims": claims
         }
@@ -218,6 +233,14 @@ def authorize_action(req: AuthzRequest):
     
     allowed, reason = evaluate_rego_policy(input_data)
     logger.info(f"Authz evaluation: Action='{req.action}', Sub='{claims.get('sub')}', Allowed={allowed}, PQC_Verified={pqc_verified}")
+    
+    AuditEvent.log(
+        action=req.action,
+        actor=claims.get("sub", "unknown"),
+        target=req.target_asset or req.dest_service or "system",
+        status="ALLOWED" if allowed else "DENIED",
+        details={"reason": reason, "pqc_verified": pqc_verified, "agent_task": req.agent_task}
+    )
     
     return AuthzResponse(
         allowed=allowed,

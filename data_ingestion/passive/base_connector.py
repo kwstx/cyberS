@@ -2,13 +2,16 @@ import asyncio
 import time
 import random
 import logging
+import os
+import structlog
 from enum import Enum
 from typing import Dict, Any, Optional
 import httpx
 
 from data_ingestion.passive.models import ConnectorConfig, IngestionResult
 
-logger = logging.getLogger("PassiveIngestion.BaseConnector")
+logger = structlog.get_logger("PassiveIngestion.BaseConnector")
+
 
 class CircuitBreakerState(Enum):
     CLOSED = "CLOSED"      # Normal operation
@@ -56,10 +59,15 @@ class BaseAPIConnector:
     """
     def __init__(self, config: ConnectorConfig):
         self.config = config
+        mtls_cert = os.getenv("MTLS_CLIENT_CERT_PATH")
+        mtls_key = os.getenv("MTLS_CLIENT_KEY_PATH")
+        cert_config = (mtls_cert, mtls_key) if mtls_cert and mtls_key else None
+        
         self.client = httpx.AsyncClient(
             base_url=self.config.base_url,
             timeout=self.config.timeout,
-            headers=self.config.extra_headers
+            headers=self.config.extra_headers,
+            cert=cert_config
         )
         self.circuit_breaker = CircuitBreaker()
         self._last_request_time = 0.0
@@ -93,12 +101,16 @@ class BaseAPIConnector:
         Executes an HTTP request with circuit breaking, rate limiting, and retries.
         Returns an IngestionResult capturing full provenance.
         """
+        safe_params = params.copy() if params else None
+        if safe_params and "api_key" in safe_params:
+            safe_params["api_key"] = "***REDACTED***"
+            
         if not self.circuit_breaker.can_execute():
             return IngestionResult(
                 job_id=job_id,
                 source_name=self.__class__.__name__,
                 timestamp=time.time(),
-                request_params={"method": method, "endpoint": endpoint},
+                request_params={"method": method, "endpoint": endpoint, "params": safe_params},
                 response_status=None,
                 payload=None,
                 errors="Circuit breaker is OPEN. Fast failing request."
@@ -127,7 +139,7 @@ class BaseAPIConnector:
                     job_id=job_id,
                     source_name=self.__class__.__name__,
                     timestamp=time.time(),
-                    request_params={"method": method, "endpoint": endpoint, "params": params},
+                    request_params={"method": method, "endpoint": endpoint, "params": safe_params},
                     response_status=response.status_code,
                     payload=response.json(),
                     errors=None
@@ -143,7 +155,7 @@ class BaseAPIConnector:
                         job_id=job_id,
                         source_name=self.__class__.__name__,
                         timestamp=time.time(),
-                        request_params={"method": method, "endpoint": endpoint, "params": params},
+                        request_params={"method": method, "endpoint": endpoint, "params": safe_params},
                         response_status=status,
                         payload=None,
                         errors=f"Client Error: {e}"
@@ -166,7 +178,7 @@ class BaseAPIConnector:
                     job_id=job_id,
                     source_name=self.__class__.__name__,
                     timestamp=time.time(),
-                    request_params={"method": method, "endpoint": endpoint, "params": params},
+                    request_params={"method": method, "endpoint": endpoint, "params": safe_params},
                     response_status=None,
                     payload=None,
                     errors="Max retries exceeded."
@@ -177,7 +189,7 @@ class BaseAPIConnector:
             job_id=job_id,
             source_name=self.__class__.__name__,
             timestamp=time.time(),
-            request_params={"method": method, "endpoint": endpoint, "params": params},
+            request_params={"method": method, "endpoint": endpoint, "params": safe_params},
             response_status=None,
             payload=None,
             errors="Unknown error executing request."

@@ -4,22 +4,25 @@ import asyncio
 import json
 import os
 import base64
+import structlog
 from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from aiokafka import AIOKafkaConsumer
+from tenacity import retry, wait_exponential, stop_after_attempt
 
 from crypto_pqc import PQCKeyEncapsulator, secure_json_encrypt
 from enrichment import EnrichmentPipeline
 from data_ingestion.passive.service import PassiveIngestionService
 from data_ingestion.passive.models import JobConfig, ConnectorConfig
 from data_ingestion.passive.dummy_connector import DummyConnector
+from core.observability import setup_observability
 
 # Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("DataIngestionService")
+logger = structlog.get_logger("DataIngestionService")
 
 app = FastAPI(title="DARIP Data Ingestion Service", version="1.0.0")
+setup_observability(app, "data_ingestion")
 
 # Internal state: governance connection
 GOVERNANCE_URL = os.getenv("GOVERNANCE_URL", "http://localhost:8001")
@@ -85,6 +88,7 @@ def get_governance_token() -> tuple[str, str]:
         logger.error(f"Failed to fetch token from Governance Service: {e}")
         raise HTTPException(status_code=500, detail="Governance authentication failed.")
 
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
 async def forward_to_fusion(payload: dict):
     # 1. Acquire Zero-Trust Tokens from Governance service
     try:

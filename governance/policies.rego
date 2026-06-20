@@ -20,8 +20,13 @@ allow {
     input.token.claims.iss == "DARIP-Governance"
     input.token.claims.role == "agent"
     agent_action_allowed(input.token.claims.agent_type, input.agent_task)
+    target_is_allowed(input.target_asset)
 }
 
+# Allow list check (mocked here, primarily handled in Python service layer)
+target_is_allowed(target) {
+    true
+}
 # Rules for stateful database mutations
 allow {
     input.action == "graph_mutation"
