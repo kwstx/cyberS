@@ -13,6 +13,8 @@ class AssetType(str, Enum):
     URL = "url"
     SOFTWARE = "software"
     ORGANIZATION = "identity"
+    HOST = "host"
+    CLOUD_RESOURCE = "cloud-resource"
 
 class Asset(BaseModel):
     id: str = Field(..., description="Unique identifier for the asset (e.g., asset--<uuid>)")
