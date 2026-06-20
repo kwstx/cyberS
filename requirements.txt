@@ -23,3 +23,7 @@ structlog==24.2.0
 tenacity==8.4.1
 pyspark>=3.5.0
 pandas>=2.1.0
+torch>=2.2.0
+torch-geometric>=2.5.0
+transformers>=4.38.0
+pytorch-forecasting>=1.0.0

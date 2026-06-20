@@ -1,13 +1,23 @@
 import logging
 import httpx
 import structlog
+import torch
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from typing import Dict, List, Any
 from core.observability import setup_observability
+from predictive_inference.models.multi_modal import MultiModalFusionEngine
 
 # Logging
 logger = structlog.get_logger("PredictiveInferenceService")
+
+# Initialize Engine
+try:
+    fusion_engine = MultiModalFusionEngine()
+    fusion_engine.eval()
+except Exception as e:
+    logger.error(f"Failed to initialize MultiModalFusionEngine: {e}")
+    fusion_engine = None
 
 app = FastAPI(title="DARIP Predictive Inference Service", version="1.0.0")
 setup_observability(app, "predictive_inference")
@@ -43,6 +53,8 @@ def get_governance_token() -> tuple[str, str]:
 @app.get("/health")
 def health():
     return {"status": "healthy"}
+# In-memory cache for graceful degradation fallbacks
+subgraph_cache = {}
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict_vendor_risk(req: PredictionRequest):
@@ -54,34 +66,59 @@ async def predict_vendor_risk(req: PredictionRequest):
     """
     logger.info(f"Received risk prediction request for vendor '{req.vendor_name}'")
     
+    is_degraded = False
+    headers = {}
+    
     # 1. Fetch Auth credentials
-    token, pqc_sig = get_governance_token()
-    headers = {
-        "X-DARIP-Token": token,
-        "X-DARIP-PQC-Sig": pqc_sig
-    }
+    try:
+        token, pqc_sig = get_governance_token()
+        headers = {
+            "X-DARIP-Token": token,
+            "X-DARIP-PQC-Sig": pqc_sig
+        }
+    except Exception as e:
+        logger.warning(f"Could not obtain governance token: {e}. Operating in degraded mode.")
+        is_degraded = True
 
     # 2. Fetch Subgraph from stateful Fusion storage
-    try:
-        async with httpx.AsyncClient() as client:
-            subgraph_resp = await client.get(
-                f"{FUSION_URL}/subgraph/{req.vendor_name}",
-                headers=headers
-            )
-            subgraph_resp.raise_for_status()
-            subgraph = subgraph_resp.json()
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Could not retrieve subgraph for {req.vendor_name}: {e.response.text}")
-        raise HTTPException(status_code=e.response.status_code, detail=f"Graph retrieval failed: {e.response.text}")
-    except Exception as e:
-        logger.error(f"Failed to connect to Semantic Fusion: {e}")
-        raise HTTPException(status_code=502, detail="Stateful graph service currently unreachable.")
+    subgraph = None
+    if not is_degraded:
+        try:
+            async with httpx.AsyncClient() as client:
+                subgraph_resp = await client.get(
+                    f"{FUSION_URL}/subgraph/{req.vendor_name}",
+                    headers=headers
+                )
+                subgraph_resp.raise_for_status()
+                subgraph = subgraph_resp.json()
+                # Store in cache
+                subgraph_cache[req.vendor_name] = subgraph
+        except Exception as e:
+            logger.warning(f"Failed to retrieve subgraph for {req.vendor_name}: {e}. Operating in degraded mode.")
+            is_degraded = True
+
+    if is_degraded or subgraph is None:
+        # Graceful fallback: check cache
+        subgraph = subgraph_cache.get(req.vendor_name)
+        if subgraph is None:
+            logger.info(f"No cached subgraph for '{req.vendor_name}'. Using baseline default.")
+            # Build baseline default subgraph
+            subgraph = {
+                "nodes": [
+                    {
+                        "labels": ["Vendor"],
+                        "properties": {
+                            "name": req.vendor_name,
+                            "security_score": 75
+                        }
+                    }
+                ],
+                "edges": []
+            }
+        else:
+            logger.info(f"Retrieved cached subgraph for '{req.vendor_name}'")
 
     # 3. Process predictive risk algorithm (Stateless Inference)
-    # We analyze:
-    # - How many dependencies (nth-party) exist?
-    # - What are their ratings?
-    # - Are there active CVEs detected in component-running devices?
     nodes = subgraph.get("nodes", [])
     edges = subgraph.get("edges", [])
     
@@ -114,18 +151,37 @@ async def predict_vendor_risk(req: PredictionRequest):
     # Calculate average vendor security rating in subgraph (defaulting to 80 if none)
     avg_vendor_rating = (total_rating_score / vendor_count) if vendor_count > 0 else 80.0
     
-    # Calculate vulnerability cascade probability (nth-party propagation)
-    # Model risk propagation probability: if nth-party count is high, cascade risk goes up.
-    # If active CVE count is > 0, risk spikes significantly.
-    cascade_prob = 0.05 + (0.05 * min(vendor_count, 8)) + (0.15 * min(active_cves_count, 4))
-    cascade_prob = min(cascade_prob, 0.99) # Cap at 99%
+    # Prepare features for Multi-Modal Engine
+    num_nodes = len(nodes)
+    node_features = torch.zeros((num_nodes, 5))
+    if num_nodes > 0:
+        node_features[:, 0] = avg_vendor_rating / 100.0
+        node_features[:, 1] = active_cves_count / 10.0
     
-    # Base risk score (0-100, where higher is worse)
-    # Fuses rating (high rating = low risk) with active vulnerabilites and vendor footprint depth
-    base_risk = (100.0 - avg_vendor_rating) * 0.4 + (active_cves_count * 15.0) + (vendor_count * 4.0)
-    base_risk = max(5.0, min(base_risk, 95.0)) # bounding
+    edge_index = torch.zeros((2, max(1, len(edges))), dtype=torch.long)
+    
+    text_data = [f"Threat intelligence summary for {req.vendor_name}"]
+    if active_cves_count > 0:
+         text_data.append(f"Detected {active_cves_count} active vulnerabilities in upstream dependencies.")
+         
+    time_series = torch.rand((1, 30, 3)) # Mock 30 days of historical telemetry
+    
+    if fusion_engine is not None:
+        with torch.no_grad():
+            preds = fusion_engine(node_features, edge_index, text_data, time_series)
+            base_risk = preds["composite_risk_score"]
+            cascade_prob = preds["vulnerability_cascade_probability"]
+    else:
+        # Fallback heuristics
+        cascade_prob = 0.05 + (0.05 * min(vendor_count, 8)) + (0.15 * min(active_cves_count, 4))
+        cascade_prob = min(cascade_prob, 0.99)
+        base_risk = (100.0 - avg_vendor_rating) * 0.4 + (active_cves_count * 15.0) + (vendor_count * 4.0)
+        base_risk = max(5.0, min(base_risk, 95.0))
+        factors.append("Multi-modal engine unavailable. Using fallback heuristics.")
     
     # Formulate contributing factors
+    if is_degraded:
+        factors.append("Operating in degraded mode: external dependencies offline. Baseline/cached data applied.")
     if avg_vendor_rating < 70:
         factors.append(f"Low average ecosystem security rating: {avg_vendor_rating:.1f}")
     if active_cves_count > 0:
@@ -148,7 +204,7 @@ async def predict_vendor_risk(req: PredictionRequest):
     else:
         risk_level = "LOW"
 
-    logger.info(f"Prediction computed: RiskScore={base_risk:.2f}, CascadeProb={cascade_prob:.2f}")
+    logger.info(f"Prediction computed: RiskScore={base_risk:.2f}, CascadeProb={cascade_prob:.2f}, Degraded={is_degraded}")
 
     return PredictionResponse(
         vendor_name=req.vendor_name,
