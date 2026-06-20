@@ -12,6 +12,7 @@ from crypto_pqc import PQCKeyEncapsulator, secure_json_decrypt
 from semantic_fusion.graph_client import GraphClient
 from semantic_fusion.nlp_extractor import NLPExtractor
 from semantic_fusion.gnn_resolver import GNNEntityResolver
+from fusion.sbom_correlation import SBOMCorrelationEngine
 
 # OpenLineage imports
 from openlineage.client import OpenLineageClient, set_producer
@@ -28,6 +29,7 @@ app = FastAPI(title="DARIP Semantic Fusion Service", version="2.0.0")
 graph_client = GraphClient()
 nlp_extractor = NLPExtractor()
 gnn_resolver = GNNEntityResolver(threshold=0.85)
+sbom_correlation_engine = SBOMCorrelationEngine()
 
 # OpenLineage Client
 set_producer("https://github.com/kwstx/cyberS/semantic_fusion")
@@ -126,17 +128,43 @@ async def fuse_data(
         nodes_created += 1
 
         # A. SBOM & Dependencies (SoftwareComponent)
-        if signal_type == "sbom":
-            pkg_name = original_signal.get("package", "unknown")
-            version = original_signal.get("version", "0.0.0")
-            await graph_client.add_component(
-                identity_name=resolved_identity,
-                name=pkg_name,
-                version=version,
-                source="npm/pypi_connector"
-            )
-            nodes_created += 1
-            
+        ingested_signals = decrypted_data.get("ingested_signals", [])
+        if "sbom" in ingested_signals or signal_type == "sbom":
+            sbom_data = payload.get("sbom", {})
+            if sbom_data:
+                components = sbom_data.get("components", [])
+                provenance = sbom_data.get("provenance", {})
+                source_fmt = sbom_data.get("format", "SBOM")
+                
+                correlation_results = sbom_correlation_engine.correlate(components)
+                for res in correlation_results:
+                    comp = res["component"]
+                    await graph_client.add_component(
+                        identity_name=resolved_identity,
+                        name=comp.get("name", "unknown"),
+                        version=comp.get("version", "0.0.0"),
+                        purl=comp.get("purl"),
+                        source=source_fmt,
+                        provenance=provenance
+                    )
+                    purl_str = comp.get("purl") or f"pkg:generic/{comp.get('name', 'unknown')}@{comp.get('version', '0.0.0')}"
+                    await graph_client.link_vulnerabilities_to_component(
+                        purl=purl_str,
+                        vulnerabilities=res["vulnerabilities"],
+                        exploit_score=res["exploit_prediction_score"],
+                        severity=res["predicted_severity"]
+                    )
+                    nodes_created += 2
+            else:
+                pkg_name = original_signal.get("package", "unknown")
+                version = original_signal.get("version", "0.0.0")
+                await graph_client.add_component(
+                    identity_name=resolved_identity,
+                    name=pkg_name,
+                    version=version,
+                    source="npm/pypi_connector"
+                )
+                nodes_created += 1
         # B. Vulnerability Feed (Extract CVEs via NLP regex heuristic)
         elif signal_type == "vulnerability":
             cve_id = original_signal.get("cve_id")

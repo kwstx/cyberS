@@ -17,6 +17,7 @@ from data_ingestion.passive.service import PassiveIngestionService
 from data_ingestion.passive.models import JobConfig, ConnectorConfig
 from data_ingestion.passive.dummy_connector import DummyConnector
 from core.observability import setup_observability
+from data_ingestion.sbom import SBOMParser, ProvenanceValidator
 
 # Logging
 logger = structlog.get_logger("DataIngestionService")
@@ -36,20 +37,7 @@ enricher = EnrichmentPipeline()
 passive_service = PassiveIngestionService()
 passive_service.register_connector_class("DummyConnector", DummyConnector)
 
-# Structures for ingestion
-class Component(BaseModel):
-    name: str
-    version: str
-    purl: Optional[str] = None
-    bom_ref: Optional[str] = None
-
-class CycloneDXSBOM(BaseModel):
-    bomFormat: str = "CycloneDX"
-    specVersion: str
-    serialNumber: str
-    version: int
-    metadata: Dict[str, Any]
-    components: List[Component]
+# We now use SBOMParser to handle generic SBOM formats.
 
 class ExternalRating(BaseModel):
     vendor_name: str
@@ -69,7 +57,8 @@ class NetworkScanResult(BaseModel):
     cve_detections: List[str]
 
 class MultiSignalPayload(BaseModel):
-    sbom: Optional[CycloneDXSBOM] = None
+    sbom: Optional[Dict[str, Any]] = None
+    provenance: Optional[Dict[str, Any]] = None
     rating: Optional[ExternalRating] = None
     telemetry: Optional[InternalTelemetry] = None
     network_scan: Optional[NetworkScanResult] = None
@@ -203,9 +192,14 @@ async def ingest_signals(payload: MultiSignalPayload):
 
     if payload.sbom:
         normalized_data["ingested_signals"].append("sbom")
+        parsed_sbom = SBOMParser.parse(payload.sbom)
+        provenance_data = ProvenanceValidator.validate(payload.provenance)
+        
         normalized_data["payload"]["sbom"] = {
-            "vendor": payload.sbom.metadata.get("component", {}).get("name", "Unknown"),
-            "components": [c.model_dump() for c in payload.sbom.components]
+            "vendor": parsed_sbom.vendor,
+            "format": parsed_sbom.format,
+            "components": [c.model_dump() for c in parsed_sbom.components],
+            "provenance": provenance_data.model_dump()
         }
 
     if payload.rating:

@@ -112,29 +112,51 @@ class GraphClient:
                 "type": "TARGETS", "properties": {"confidence": confidence, "timestamp": time.time()}
             })
 
-    async def add_component(self, identity_name: str, name: str, version: str, purl: str = None, source: str = "SBOM") -> Dict[str, Any]:
+    async def add_component(self, identity_name: str, name: str, version: str, purl: str = None, source: str = "SBOM", provenance: Dict[str, Any] = None) -> Dict[str, Any]:
         """Creates a SoftwareComponent and links it to an Identity with provenance."""
         await self.create_identity(identity_name)
         comp_id_str = purl if purl else f"pkg:generic/{name}@{version}"
+        prov = provenance or {}
         
         if self.driver:
             query = """
             MERGE (c:SoftwareComponent {purl: $purl})
-            SET c.name = $name, c.version = $version, c.stix_type = 'software'
+            SET c.name = $name, 
+                c.version = $version, 
+                c.stix_type = 'software',
+                c.has_provenance = $has_provenance,
+                c.signature_verified = $signature_verified,
+                c.slsa_level = $slsa_level
             WITH c
             MATCH (i:Identity {name: $identity_name})
             MERGE (i)-[r:DEVELOPED {source: $source, timestamp: $ts}]->(c)
             RETURN c
             """
             async with self.driver.session() as session:
-                res = await session.run(query, purl=comp_id_str, name=name, version=version, identity_name=identity_name, source=source, ts=time.time())
+                res = await session.run(query, 
+                                        purl=comp_id_str, 
+                                        name=name, 
+                                        version=version, 
+                                        identity_name=identity_name, 
+                                        source=source, 
+                                        ts=time.time(),
+                                        has_provenance=prov.get("has_provenance", False),
+                                        signature_verified=prov.get("signature_verified", False),
+                                        slsa_level=prov.get("slsa_level"))
                 rec = await res.single()
                 return rec["c"] if rec else {}
         else:
             node_id = f"SoftwareComponent:{comp_id_str}"
             self.mock_nodes[node_id] = {
                 "label": "SoftwareComponent",
-                "properties": {"name": name, "version": version, "purl": comp_id_str}
+                "properties": {
+                    "name": name, 
+                    "version": version, 
+                    "purl": comp_id_str,
+                    "has_provenance": prov.get("has_provenance", False),
+                    "signature_verified": prov.get("signature_verified", False),
+                    "slsa_level": prov.get("slsa_level")
+                }
             }
             ident_id = f"Identity:{identity_name}"
             self.mock_edges.append({
@@ -142,6 +164,43 @@ class GraphClient:
                 "properties": {"source": source, "timestamp": time.time()}
             })
             return self.mock_nodes[node_id]["properties"]
+
+    async def link_vulnerabilities_to_component(self, purl: str, vulnerabilities: List[str], exploit_score: float, severity: str) -> bool:
+        if not vulnerabilities:
+            return True
+            
+        if self.driver:
+            query = """
+            MATCH (c:SoftwareComponent {purl: $purl})
+            SET c.exploit_score = $exploit_score,
+                c.predicted_severity = $severity
+            WITH c
+            UNWIND $vulnerabilities AS cve_id
+            MERGE (v:Vulnerability {id: cve_id})
+            ON CREATE SET v.stix_type = 'vulnerability', v.created_at = $ts
+            MERGE (c)-[r:HAS_VULNERABILITY]->(v)
+            RETURN count(r) as count
+            """
+            async with self.driver.session() as session:
+                res = await session.run(query, purl=purl, vulnerabilities=vulnerabilities, exploit_score=exploit_score, severity=severity, ts=time.time())
+                rec = await res.single()
+                return rec is not None
+        else:
+            comp_id = f"SoftwareComponent:{purl}"
+            if comp_id in self.mock_nodes:
+                self.mock_nodes[comp_id]["properties"]["exploit_score"] = exploit_score
+                self.mock_nodes[comp_id]["properties"]["predicted_severity"] = severity
+                for cve in vulnerabilities:
+                    vuln_id = f"Vulnerability:{cve}"
+                    if vuln_id not in self.mock_nodes:
+                        self.mock_nodes[vuln_id] = {"label": "Vulnerability", "properties": {"id": cve}}
+                    self.mock_edges.append({
+                        "from": comp_id,
+                        "to": vuln_id,
+                        "type": "HAS_VULNERABILITY",
+                        "properties": {}
+                    })
+            return True
 
     async def add_device_and_vulnerabilities(self, ip_address: str, open_ports: List[int], cves: List[str]) -> bool:
         if self.driver:
