@@ -143,6 +143,28 @@ class GraphClient:
             })
             return self.mock_nodes[node_id]["properties"]
 
+    async def add_device_and_vulnerabilities(self, ip_address: str, open_ports: List[int], cves: List[str]) -> bool:
+        if self.driver:
+            query = """
+            MERGE (d:Device {id: $ip_address})
+            SET d.open_ports = $open_ports, d.cves = $cves, d.last_seen = $ts
+            RETURN d
+            """
+            async with self.driver.session() as session:
+                res = await session.run(query, ip_address=ip_address, open_ports=open_ports, cves=cves, ts=time.time())
+                rec = await res.single()
+                return rec is not None
+        else:
+            dev_node_id = f"Device:{ip_address}"
+            if dev_node_id not in self.mock_nodes:
+                self.mock_nodes[dev_node_id] = {"label": "Device", "properties": {"id": ip_address}}
+            self.mock_nodes[dev_node_id]["properties"].update({
+                "open_ports": open_ports,
+                "cves": cves,
+                "last_seen": time.time()
+            })
+            return True
+
     async def link_device_to_component(self, device_id: str, comp_purl: str, cve_detections: List[str] = None) -> bool:
         cves = cve_detections if cve_detections else []
         if self.driver:

@@ -74,6 +74,23 @@ async def threat_feed_connector(producer: AIOKafkaProducer):
         print(f"[Threat Feed Connector] Sent mock threat report", flush=True)
         await asyncio.sleep(random.randint(30, 120))
 
+async def mock_scanner_connector(producer: AIOKafkaProducer):
+    while True:
+        # Mock Network Scanner data
+        ips = ["192.168.1.50", "10.0.0.12", "172.16.0.100", "192.168.2.200"]
+        ip = random.choice(ips)
+        payload = {
+            "source": "network_scanner",
+            "type": "network_scan",
+            "ip_address": ip,
+            "open_ports": random.sample([80, 443, 22, 3306, 8080], random.randint(1, 4)),
+            "cve_detections": [f"CVE-202{random.randint(0,5)}-{random.randint(1000,9999)}" for _ in range(random.randint(0, 3))],
+            "timestamp": time.time()
+        }
+        await producer.send_and_wait(TOPIC, json.dumps(payload).encode('utf-8'))
+        print(f"[Network Scanner Connector] Sent mock scan for {ip}", flush=True)
+        await asyncio.sleep(random.randint(25, 60))
+
 async def main():
     print(f"Starting Connectors. Connecting to Kafka at {KAFKA_BOOTSTRAP_SERVERS}", flush=True)
     # Give Kafka some time to start up
@@ -100,7 +117,8 @@ async def main():
             github_connector(producer),
             npm_connector(producer),
             pypi_connector(producer),
-            threat_feed_connector(producer)
+            threat_feed_connector(producer),
+            mock_scanner_connector(producer)
         )
     finally:
         await producer.stop()

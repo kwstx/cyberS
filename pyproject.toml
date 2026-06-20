@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cybers-darip"
+version = "0.1.0"
+description = "Decentralized Agentic Risk Intelligence Fabric"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "pydantic-settings",
+    "sqlalchemy",
+    "neo4j",
+    "httpx",
+    "prometheus-client",
+    "structlog",
+    "aiokafka",
+    "confluent-kafka"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "black",
+    "isort",
+    "flake8"
+]

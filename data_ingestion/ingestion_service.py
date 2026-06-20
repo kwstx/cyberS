@@ -53,10 +53,16 @@ class InternalTelemetry(BaseModel):
     outbound_payload_size_mb: float
     cve_detections: List[str]
 
+class NetworkScanResult(BaseModel):
+    ip_address: str
+    open_ports: List[int]
+    cve_detections: List[str]
+
 class MultiSignalPayload(BaseModel):
     sbom: Optional[CycloneDXSBOM] = None
     rating: Optional[ExternalRating] = None
     telemetry: Optional[InternalTelemetry] = None
+    network_scan: Optional[NetworkScanResult] = None
 
 # Governance Token retrieval helper
 def get_governance_token() -> tuple[str, str]:
@@ -193,6 +199,10 @@ async def ingest_signals(payload: MultiSignalPayload):
     if payload.telemetry:
         normalized_data["ingested_signals"].append("telemetry")
         normalized_data["payload"]["telemetry"] = payload.telemetry.model_dump()
+
+    if payload.network_scan:
+        normalized_data["ingested_signals"].append("network_scan")
+        normalized_data["payload"]["network_scan"] = payload.network_scan.model_dump()
 
     if not normalized_data["ingested_signals"]:
         raise HTTPException(status_code=400, detail="No signals provided for ingestion.")

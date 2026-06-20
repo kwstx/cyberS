@@ -155,6 +155,16 @@ async def fuse_data(
                 await graph_client.link_threat_to_identity(actor, resolved_identity, confidence=0.85)
                 nodes_created += 2
 
+        # D. Network Scanner
+        elif signal_type == "network_scan":
+            ip_address = original_signal.get("ip_address")
+            open_ports = original_signal.get("open_ports", [])
+            cves = original_signal.get("cve_detections", [])
+            
+            if ip_address:
+                await graph_client.add_device_and_vulnerabilities(ip_address, open_ports, cves)
+                nodes_created += 1
+
         await emit_lineage(run_id, "fuse_data_pipeline", RunState.COMPLETE)
         
         return {
