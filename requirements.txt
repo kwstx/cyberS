@@ -21,3 +21,5 @@ opentelemetry-exporter-otlp==1.25.0
 prometheus-client==0.20.0
 structlog==24.2.0
 tenacity==8.4.1
+pyspark>=3.5.0
+pandas>=2.1.0

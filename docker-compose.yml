@@ -131,6 +131,18 @@ services:
     depends_on:
       - kafka
 
+  # Layer 2b: Spark Streaming Service for CEP & ML Anomaly Detection
+  spark_streaming:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: darip-spark-streaming
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    depends_on:
+      - kafka
+      - semantic_fusion
+
 volumes:
   neo4j_data:
   neo4j_logs:
