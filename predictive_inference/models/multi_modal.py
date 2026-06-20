@@ -178,8 +178,50 @@ class MultiModalFusionEngine(nn.Module):
         return {
             "composite_risk_score": risk_score_raw * 100.0, # Scale to 0-100 (tensor)
             "vulnerability_cascade_probability": cascade_prob_raw, # tensor
-            "composite_risk_score_val": risk_score_raw.item() * 100.0 if not self.training else None,
-            "vulnerability_cascade_probability_val": cascade_prob_raw.item() if not self.training else None
+            "composite_risk_score_val": risk_score_raw.item() * 100.0 if getattr(risk_score_raw, "item", None) else None,
+            "vulnerability_cascade_probability_val": cascade_prob_raw.item() if getattr(cascade_prob_raw, "item", None) else None
+        }
+
+    def enable_mc_dropout(self):
+        """Enable dropout layers during inference for Monte Carlo Dropout uncertainty estimation."""
+        for m in self.modules():
+            if m.__class__.__name__.startswith('Dropout'):
+                m.train()
+
+    def mc_forward(self, node_features, edge_index, text_data, time_series, num_samples: int = 10):
+        """
+        Runs multiple forward passes with dropout enabled to estimate uncertainty bounds.
+        Returns the mean and standard deviation (uncertainty) for the outputs.
+        """
+        # Ensure base model is in eval, but dropout is active
+        self.eval()
+        self.enable_mc_dropout()
+        
+        risk_scores = []
+        cascade_probs = []
+        
+        with torch.no_grad():
+            for _ in range(num_samples):
+                preds = self.forward(node_features, edge_index, text_data, time_series)
+                risk_scores.append(preds["composite_risk_score"])
+                cascade_probs.append(preds["vulnerability_cascade_probability"])
+                
+        risk_scores_tensor = torch.stack(risk_scores)
+        cascade_probs_tensor = torch.stack(cascade_probs)
+        
+        mean_risk = torch.mean(risk_scores_tensor).item()
+        std_risk = torch.std(risk_scores_tensor).item() if num_samples > 1 else 0.0
+        
+        mean_cascade = torch.mean(cascade_probs_tensor).item()
+        std_cascade = torch.std(cascade_probs_tensor).item() if num_samples > 1 else 0.0
+        
+        return {
+            "composite_risk_score_mean": mean_risk,
+            "composite_risk_score_std": std_risk,
+            "vulnerability_cascade_probability_mean": mean_cascade,
+            "vulnerability_cascade_probability_std": std_cascade,
+            "confidence_interval_95_risk": [max(0.0, mean_risk - 1.96 * std_risk), min(100.0, mean_risk + 1.96 * std_risk)],
+            "confidence_interval_95_cascade": [max(0.0, mean_cascade - 1.96 * std_cascade), min(1.0, mean_cascade + 1.96 * std_cascade)]
         }
 
 class MultiModalEnsemble(nn.Module):
@@ -205,6 +247,31 @@ class MultiModalEnsemble(nn.Module):
         return {
             "composite_risk_score": avg_risk_score,
             "vulnerability_cascade_probability": avg_cascade_prob,
-            "composite_risk_score_val": avg_risk_score.item() if not self.training else None,
-            "vulnerability_cascade_probability_val": avg_cascade_prob.item() if not self.training else None
+            "composite_risk_score_val": avg_risk_score.item() if getattr(avg_risk_score, "item", None) else None,
+            "vulnerability_cascade_probability_val": avg_cascade_prob.item() if getattr(avg_cascade_prob, "item", None) else None
+        }
+
+    def enable_mc_dropout(self):
+        for m in self.models:
+            m.enable_mc_dropout()
+
+    def mc_forward(self, node_features, edge_index, text_data, time_series, num_samples: int = 10):
+        all_mc_preds = [m.mc_forward(node_features, edge_index, text_data, time_series, num_samples) for m in self.models]
+        
+        mean_risk = sum(p["composite_risk_score_mean"] for p in all_mc_preds) / len(all_mc_preds)
+        mean_cascade = sum(p["vulnerability_cascade_probability_mean"] for p in all_mc_preds) / len(all_mc_preds)
+        
+        pooled_var_risk = sum(p["composite_risk_score_std"]**2 for p in all_mc_preds) / len(all_mc_preds)
+        std_risk = pooled_var_risk ** 0.5
+        
+        pooled_var_cascade = sum(p["vulnerability_cascade_probability_std"]**2 for p in all_mc_preds) / len(all_mc_preds)
+        std_cascade = pooled_var_cascade ** 0.5
+        
+        return {
+            "composite_risk_score_mean": mean_risk,
+            "composite_risk_score_std": std_risk,
+            "vulnerability_cascade_probability_mean": mean_cascade,
+            "vulnerability_cascade_probability_std": std_cascade,
+            "confidence_interval_95_risk": [max(0.0, mean_risk - 1.96 * std_risk), min(100.0, mean_risk + 1.96 * std_risk)],
+            "confidence_interval_95_cascade": [max(0.0, mean_cascade - 1.96 * std_cascade), min(1.0, mean_cascade + 1.96 * std_cascade)]
         }

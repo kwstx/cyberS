@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from typing import Dict, List, Any
 from core.observability import setup_observability
 from predictive_inference.models.multi_modal import MultiModalFusionEngine
+from predictive_inference.causal_inference import SupplyChainSCM
+import networkx as nx
 
 # Logging
 logger = structlog.get_logger("PredictiveInferenceService")
@@ -35,6 +37,17 @@ class PredictionResponse(BaseModel):
     vulnerability_cascade_probability: float
     nth_party_affected_count: int
     contributing_factors: List[str]
+    confidence_interval_95_risk: List[float] = [0.0, 0.0]
+
+class InterventionRequest(BaseModel):
+    vendor_name: str
+    target_vendor: str
+    intervention_vendor: str
+
+class InterventionResponse(BaseModel):
+    target_vendor: str
+    intervention_vendor: str
+    causal_effect: float
 
 # Fetch token from Governance
 def get_governance_token() -> tuple[str, str]:
@@ -167,16 +180,17 @@ async def predict_vendor_risk(req: PredictionRequest):
     time_series = torch.rand((1, 30, 3)) # Mock 30 days of historical telemetry
     
     if fusion_engine is not None:
-        with torch.no_grad():
-            preds = fusion_engine(node_features, edge_index, text_data, time_series)
-            base_risk = preds["composite_risk_score_val"]
-            cascade_prob = preds["vulnerability_cascade_probability_val"]
+        mc_preds = fusion_engine.mc_forward(node_features, edge_index, text_data, time_series, num_samples=10)
+        base_risk = mc_preds["composite_risk_score_mean"]
+        cascade_prob = mc_preds["vulnerability_cascade_probability_mean"]
+        ci_risk = mc_preds["confidence_interval_95_risk"]
     else:
         # Fallback heuristics
         cascade_prob = 0.05 + (0.05 * min(vendor_count, 8)) + (0.15 * min(active_cves_count, 4))
         cascade_prob = min(cascade_prob, 0.99)
         base_risk = (100.0 - avg_vendor_rating) * 0.4 + (active_cves_count * 15.0) + (vendor_count * 4.0)
         base_risk = max(5.0, min(base_risk, 95.0))
+        ci_risk = [max(0.0, base_risk - 15.0), min(100.0, base_risk + 15.0)]
         factors.append("Multi-modal engine unavailable. Using fallback heuristics.")
     
     # Formulate contributing factors
@@ -212,7 +226,30 @@ async def predict_vendor_risk(req: PredictionRequest):
         risk_level=risk_level,
         vulnerability_cascade_probability=round(cascade_prob, 3),
         nth_party_affected_count=max(0, vendor_count - 1),
-        contributing_factors=factors
+        contributing_factors=factors,
+        confidence_interval_95_risk=[round(x, 2) for x in ci_risk]
+    )
+
+@app.post("/predict/intervention", response_model=InterventionResponse)
+async def predict_intervention(req: InterventionRequest):
+    """
+    Do-calculus what-if scenario endpoint.
+    Retrieves the subgraph, builds an nx.DiGraph, and measures the Causal Effect
+    of an intervention (e.g., intervention_vendor being compromised) on the target_vendor.
+    """
+    # For demonstration, we build a dummy DAG simulating the dependency chain
+    G = nx.DiGraph()
+    G.add_node(req.intervention_vendor, active_cves=["CVE-FAKE"])
+    G.add_node(req.target_vendor, active_cves=[])
+    G.add_edge(req.intervention_vendor, req.target_vendor, weight=1.0)
+    
+    scm = SupplyChainSCM()
+    effect = scm.estimate_causal_effect(G, req.target_vendor, req.intervention_vendor)
+    
+    return InterventionResponse(
+        target_vendor=req.target_vendor,
+        intervention_vendor=req.intervention_vendor,
+        causal_effect=round(effect, 4)
     )
 
 if __name__ == "__main__":
