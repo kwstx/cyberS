@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 
 from storage.graph import GraphRepository
 from core.models import Asset, Exposure, AssetType, Relationship, RelationshipType
+from fusion.correlation_engine import CorrelationEngine
 
 logger = logging.getLogger("DARIP.TelemetryFusion")
 
@@ -15,6 +16,7 @@ class TelemetryFusionService:
     
     def __init__(self, graph_repo: GraphRepository):
         self.graph_repo = graph_repo
+        self.correlation_engine = CorrelationEngine(graph_repo)
 
     async def identify_shadow_it(self) -> List[Asset]:
         """
@@ -100,8 +102,12 @@ class TelemetryFusionService:
             logger.info(f"Flagged shadow IT exposure {exposure_id} for asset {asset.value}")
 
     async def run_fusion_loop(self, interval_seconds: int = 3600):
-        """Run the fusion service periodically."""
+        """Run the fusion service periodically and start the correlation engine."""
         logger.info(f"Starting TelemetryFusionService with interval {interval_seconds}s")
+        
+        # Start Kafka correlation engine
+        await self.correlation_engine.start()
+        
         while True:
             try:
                 await self.flag_shadow_it_exposures()

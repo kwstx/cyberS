@@ -58,6 +58,16 @@ class GraphRepository:
                 return dict(node)
             return None
 
+    async def get_all_assets(self) -> List[Dict[str, Any]]:
+        """Retrieve all Asset nodes (useful for candidate matching in correlation)."""
+        query = "MATCH (a:Asset) RETURN a"
+        assets = []
+        async with self.driver.session() as session:
+            result = await session.run(query)
+            async for record in result:
+                assets.append(dict(record["a"]))
+        return assets
+
     async def upsert_vulnerability(self, vuln: Vulnerability) -> None:
         """Insert or update a Vulnerability node."""
         query = """
