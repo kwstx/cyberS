@@ -7,5 +7,33 @@
     },
     "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
     "hash": "70b35d90fa044da8236539b3f5158d0e7291bfcb8afd32984c6386af66ff0f14"
+  },
+  {
+    "index": 1,
+    "timestamp": 1782046894.8907597,
+    "event": {
+      "event_type": "AUDIT",
+      "action": "risk_assessment_generated",
+      "actor": "predictive_inference",
+      "target": "TestVendorCorp",
+      "status": "SUCCESS",
+      "details": {
+        "model_version": "Heuristic_Fallback",
+        "input_features": {
+          "avg_vendor_rating": 75.0,
+          "active_cves_count": 0,
+          "vendor_count": 1
+        },
+        "shap_values": {
+          "Ecosystem Rating Risk": 10.0,
+          "Active CVE Risk": 0.0,
+          "Supply Chain Depth": 4.0
+        },
+        "final_score": 47.31,
+        "risk_level": "MEDIUM"
+      }
+    },
+    "prev_hash": "70b35d90fa044da8236539b3f5158d0e7291bfcb8afd32984c6386af66ff0f14",
+    "hash": "9d52b125b2ba6f2261012e76f95668b8a02a9f1b5dd9bc4f152bf27f5f719e53"
   }
 ]

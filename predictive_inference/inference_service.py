@@ -6,8 +6,10 @@ from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from typing import Dict, List, Any
 from core.observability import setup_observability
+from core.audit import AuditEvent
 from predictive_inference.models.multi_modal import MultiModalFusionEngine
 from predictive_inference.causal_inference import SupplyChainSCM
+from predictive_inference.explainer import ExplainerService
 import networkx as nx
 
 # Logging
@@ -20,6 +22,8 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize MultiModalFusionEngine: {e}")
     fusion_engine = None
+
+explainer_service = ExplainerService()
 
 app = FastAPI(title="DARIP Predictive Inference Service", version="1.0.0")
 setup_observability(app, "predictive_inference")
@@ -38,6 +42,7 @@ class PredictionResponse(BaseModel):
     nth_party_affected_count: int
     contributing_factors: List[str]
     confidence_interval_95_risk: List[float] = [0.0, 0.0]
+    shap_values: Dict[str, float] = {}
 
 class InterventionRequest(BaseModel):
     vendor_name: str
@@ -220,6 +225,28 @@ async def predict_vendor_risk(req: PredictionRequest):
 
     logger.info(f"Prediction computed: RiskScore={base_risk:.2f}, CascadeProb={cascade_prob:.2f}, Degraded={is_degraded}")
 
+    # Compute SHAP Values
+    shap_vals = explainer_service.explain_prediction(avg_vendor_rating, active_cves_count, vendor_count)
+
+    # Full Provenance Tracking
+    AuditEvent.log(
+        action="risk_assessment_generated",
+        actor="predictive_inference",
+        target=req.vendor_name,
+        status="SUCCESS",
+        details={
+            "model_version": "Heuristic_Fallback" if is_degraded or fusion_engine is None else "MultiModal_v1",
+            "input_features": {
+                "avg_vendor_rating": avg_vendor_rating,
+                "active_cves_count": active_cves_count,
+                "vendor_count": vendor_count
+            },
+            "shap_values": shap_vals,
+            "final_score": round(base_risk, 2),
+            "risk_level": risk_level
+        }
+    )
+
     return PredictionResponse(
         vendor_name=req.vendor_name,
         composite_risk_score=round(base_risk, 2),
@@ -227,7 +254,8 @@ async def predict_vendor_risk(req: PredictionRequest):
         vulnerability_cascade_probability=round(cascade_prob, 3),
         nth_party_affected_count=max(0, vendor_count - 1),
         contributing_factors=factors,
-        confidence_interval_95_risk=[round(x, 2) for x in ci_risk]
+        confidence_interval_95_risk=[round(x, 2) for x in ci_risk],
+        shap_values=shap_vals
     )
 
 @app.post("/predict/intervention", response_model=InterventionResponse)
