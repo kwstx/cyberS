@@ -165,8 +165,73 @@ async def fuse_data(
                     source="npm/pypi_connector"
                 )
                 nodes_created += 1
+
+        # MBOM & AI model tracking
+        if "mbom" in ingested_signals or signal_type == "mbom":
+            mbom_data = payload.get("mbom", {})
+            if mbom_data:
+                model_name = mbom_data.get("model_name", "unknown_model")
+                version = mbom_data.get("version", "0.0.0")
+                architecture = mbom_data.get("architecture", {})
+                sig_verified = mbom_data.get("signature_verified", False)
+                
+                await graph_client.add_ai_model(
+                    identity_name=resolved_identity,
+                    model_name=model_name,
+                    version=version,
+                    architecture=architecture,
+                    signature_verified=sig_verified
+                )
+                model_purl = f"pkg:ml/{model_name}@{version}"
+                
+                for ds in mbom_data.get("datasets", []):
+                    await graph_client.add_dataset(
+                        model_purl=model_purl,
+                        dataset_name=ds.get("name"),
+                        size_gb=ds.get("size_gb"),
+                        license=ds.get("license"),
+                        hash_sha256=ds.get("hash_sha256"),
+                        source_url=ds.get("source_url")
+                    )
+                
+                for dep in mbom_data.get("dependencies", []):
+                    await graph_client.link_model_dependency(
+                        model_purl=model_purl,
+                        dep_name=dep.get("package_name"),
+                        version=dep.get("version"),
+                        purl=dep.get("purl")
+                    )
+                nodes_created += 3
+
+        # Binary Scan reputation and ML malware analysis
+        if "binary_scan" in ingested_signals or signal_type == "binary_scan":
+            scan_data = payload.get("binary_scan", {})
+            if scan_data:
+                target_purl = scan_data.get("target_purl")
+                file_hash = scan_data.get("hash")
+                reversinglabs = scan_data.get("reversinglabs", {})
+                ml_analysis = scan_data.get("ml_analysis", {})
+                
+                is_malicious = reversinglabs.get("status") == "MALICIOUS" or ml_analysis.get("malware_detected", False)
+                threat_name = reversinglabs.get("threat_name")
+                trust_factor = reversinglabs.get("trust_factor", 100)
+                malware_prob = ml_analysis.get("malware_probability", 0.0)
+                features = ml_analysis.get("features_analyzed", {})
+                
+                await graph_client.add_binary_analysis_report(
+                    target_purl=target_purl,
+                    hash_val=file_hash,
+                    status=reversinglabs.get("status", "UNKNOWN"),
+                    threat_name=threat_name,
+                    trust_factor=trust_factor,
+                    malware_prob=malware_prob,
+                    is_malicious=is_malicious,
+                    features=features
+                )
+                nodes_created += 1
+
         # B. Vulnerability Feed (Extract CVEs via NLP regex heuristic)
-        elif signal_type == "vulnerability":
+        if signal_type == "vulnerability":
             cve_id = original_signal.get("cve_id")
             pkg = original_signal.get("package")
             if cve_id and pkg:
@@ -257,6 +322,31 @@ async def get_vendor_subgraph(
                 del node["properties"]["security_score"]
 
     return subgraph
+
+@app.get("/prioritize-risks")
+async def prioritize_risks(
+    x_darip_token: str = Header(..., alias="X-DARIP-Token"),
+    x_darip_pqc_sig: str = Header(..., alias="X-DARIP-PQC-Sig")
+):
+    """
+    Exposes queryable dynamic governance risks prioritizer.
+    Calculates unified exploitability and business impact prioritizations.
+    """
+    authz_payload = {
+        "action": "read_risk_intelligence",
+        "token_str": x_darip_token,
+        "pqc_token_sig": x_darip_pqc_sig
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            authz_resp = await client.post(f"{GOVERNANCE_URL}/authorize", json=authz_payload)
+            if not authz_resp.json().get("allowed"):
+                raise HTTPException(status_code=403, detail="Unauthorized")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Governance validation failed")
+
+    risks = await graph_client.get_prioritized_risks()
+    return {"status": "success", "risks": risks}
 
 if __name__ == "__main__":
     import uvicorn

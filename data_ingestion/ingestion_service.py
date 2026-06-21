@@ -16,8 +16,14 @@ from enrichment import EnrichmentPipeline
 from data_ingestion.passive.service import PassiveIngestionService
 from data_ingestion.passive.models import JobConfig, ConnectorConfig
 from data_ingestion.passive.dummy_connector import DummyConnector
-from core.observability import setup_observability
 from data_ingestion.sbom import SBOMParser, ProvenanceValidator
+from data_ingestion.binary_analysis import ReversingLabsClient, MLMalwareDetector
+from data_ingestion.mbom import MBOMParser
+from core.observability import setup_observability
+
+# Initialize clients
+rl_client = ReversingLabsClient()
+ml_detector = MLMalwareDetector()
 
 # Logging
 logger = structlog.get_logger("DataIngestionService")
@@ -62,6 +68,8 @@ class MultiSignalPayload(BaseModel):
     rating: Optional[ExternalRating] = None
     telemetry: Optional[InternalTelemetry] = None
     network_scan: Optional[NetworkScanResult] = None
+    mbom: Optional[Dict[str, Any]] = None
+    binary_scan: Optional[Dict[str, Any]] = None
 
 # Governance Token retrieval helper
 def get_governance_token() -> tuple[str, str]:
@@ -213,6 +221,24 @@ async def ingest_signals(payload: MultiSignalPayload):
     if payload.network_scan:
         normalized_data["ingested_signals"].append("network_scan")
         normalized_data["payload"]["network_scan"] = payload.network_scan.model_dump()
+
+    if payload.mbom:
+        normalized_data["ingested_signals"].append("mbom")
+        parsed_mbom = MBOMParser.parse(payload.mbom)
+        normalized_data["payload"]["mbom"] = parsed_mbom.model_dump()
+
+    if payload.binary_scan:
+        normalized_data["ingested_signals"].append("binary_scan")
+        target_purl = payload.binary_scan.get("target_purl", "unknown_purl")
+        file_hash = payload.binary_scan.get("hash", "unknown_hash")
+        rl_res = await rl_client.check_hash(file_hash)
+        ml_res = ml_detector.analyze_binary(payload.binary_scan)
+        normalized_data["payload"]["binary_scan"] = {
+            "target_purl": target_purl,
+            "hash": file_hash,
+            "reversinglabs": rl_res,
+            "ml_analysis": ml_res
+        }
 
     if not normalized_data["ingested_signals"]:
         raise HTTPException(status_code=400, detail="No signals provided for ingestion.")
