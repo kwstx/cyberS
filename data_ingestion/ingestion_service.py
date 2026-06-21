@@ -5,7 +5,10 @@ import json
 import os
 import base64
 import structlog
-from fastapi import FastAPI, HTTPException, Header, Depends
+import uuid
+import time
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from aiokafka import AIOKafkaConsumer
@@ -30,6 +33,40 @@ logger = structlog.get_logger("DataIngestionService")
 
 app = FastAPI(title="DARIP Data Ingestion Service", version="1.0.0")
 setup_observability(app, "data_ingestion")
+
+# Maximum content length: 10MB to protect memory exhaustion
+MAX_PAYLOAD_SIZE = 10 * 1024 * 1024
+
+@app.middleware("http")
+async def limit_payload_size(request: Request, call_next):
+    if request.method == "POST":
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_PAYLOAD_SIZE:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"Payload too large. Maximum size allowed is {MAX_PAYLOAD_SIZE} bytes."}
+            )
+    return await call_next(request)
+
+# Local Dead-Letter Queue (DLQ) path
+DLQ_DIR = "data/dlq"
+os.makedirs(DLQ_DIR, exist_ok=True)
+
+async def handle_quarantine(payload: Any, error_msg: str, source: str):
+    logger.warning(f"Quarantining malformed message from '{source}' due to: {error_msg}")
+    try:
+        filename = f"malformed_{source}_{int(time.time())}_{uuid.uuid4().hex[:8]}.json"
+        filepath = os.path.join(DLQ_DIR, filename)
+        with open(filepath, "w") as f:
+            json.dump({
+                "source": source,
+                "timestamp": time.time(),
+                "error": error_msg,
+                "payload": payload
+            }, f, indent=2)
+        logger.info(f"Payload successfully quarantined locally at {filepath}")
+    except Exception as e:
+        logger.error(f"Failed to quarantine payload locally: {e}")
 
 # Internal state: governance connection
 GOVERNANCE_URL = os.getenv("GOVERNANCE_URL", "http://localhost:8001")
@@ -159,8 +196,13 @@ async def consume_kafka():
     try:
         async for msg in consumer:
             logger.info(f"Received message from Kafka topic {msg.topic}")
+            raw_val = None
             try:
-                raw_data = json.loads(msg.value.decode('utf-8'))
+                raw_val = msg.value
+                raw_data = json.loads(raw_val.decode('utf-8'))
+                if not isinstance(raw_data, dict):
+                    raise ValueError("Kafka message payload is not a valid JSON object.")
+                    
                 enriched_data = await enricher.enrich(raw_data)
                 
                 normalized_data = {
@@ -176,6 +218,11 @@ async def consume_kafka():
                 await forward_to_fusion(minimized_data)
             except Exception as e:
                 logger.error(f"Error processing Kafka message: {e}")
+                try:
+                    payload_repr = raw_val.decode('utf-8', errors='replace') if raw_val else "None"
+                except Exception:
+                    payload_repr = str(raw_val)
+                await handle_quarantine(payload_repr, str(e), "kafka_stream")
     finally:
         await consumer.stop()
 
@@ -202,58 +249,79 @@ async def ingest_signals(payload: MultiSignalPayload):
         "payload": {}
     }
 
-    if payload.sbom:
-        normalized_data["ingested_signals"].append("sbom")
-        parsed_sbom = SBOMParser.parse(payload.sbom)
-        provenance_data = ProvenanceValidator.validate(payload.provenance)
+    try:
+        if payload.sbom:
+            normalized_data["ingested_signals"].append("sbom")
+            try:
+                parsed_sbom = SBOMParser.parse(payload.sbom)
+                provenance_data = ProvenanceValidator.validate(payload.provenance)
+                
+                normalized_data["payload"]["sbom"] = {
+                    "vendor": parsed_sbom.vendor,
+                    "format": parsed_sbom.format,
+                    "components": [c.model_dump() for c in parsed_sbom.components],
+                    "provenance": provenance_data.model_dump()
+                }
+            except Exception as se:
+                logger.error(f"SBOM/Provenance validation failed: {se}")
+                raise ValueError(f"Invalid SBOM or Provenance: {se}")
+
+        if payload.rating:
+            normalized_data["ingested_signals"].append("rating")
+            normalized_data["payload"]["rating"] = payload.rating.model_dump()
+
+        if payload.telemetry:
+            normalized_data["ingested_signals"].append("telemetry")
+            normalized_data["payload"]["telemetry"] = payload.telemetry.model_dump()
+
+        if payload.network_scan:
+            normalized_data["ingested_signals"].append("network_scan")
+            normalized_data["payload"]["network_scan"] = payload.network_scan.model_dump()
+
+        if payload.mbom:
+            normalized_data["ingested_signals"].append("mbom")
+            try:
+                parsed_mbom = MBOMParser.parse(payload.mbom)
+                normalized_data["payload"]["mbom"] = parsed_mbom.model_dump()
+            except Exception as me:
+                logger.error(f"MBOM validation failed: {me}")
+                raise ValueError(f"Invalid MBOM: {me}")
+
+        if payload.binary_scan:
+            normalized_data["ingested_signals"].append("binary_scan")
+            try:
+                target_purl = payload.binary_scan.get("target_purl", "unknown_purl")
+                file_hash = payload.binary_scan.get("hash", "unknown_hash")
+                rl_res = await rl_client.check_hash(file_hash)
+                ml_res = ml_detector.analyze_binary(payload.binary_scan)
+                normalized_data["payload"]["binary_scan"] = {
+                    "target_purl": target_purl,
+                    "hash": file_hash,
+                    "reversinglabs": rl_res,
+                    "ml_analysis": ml_res
+                }
+            except Exception as be:
+                logger.error(f"Binary scan analysis failed: {be}")
+                raise ValueError(f"Invalid binary scan payload: {be}")
+
+        if not normalized_data["ingested_signals"]:
+            raise HTTPException(status_code=400, detail="No signals provided for ingestion.")
+
+        # Apply data minimization
+        from data_ingestion.data_minimization import apply_data_minimization
+        minimized_data = apply_data_minimization(normalized_data)
+
+        # Forward to semantic fusion
+        await forward_to_fusion(minimized_data)
         
-        normalized_data["payload"]["sbom"] = {
-            "vendor": parsed_sbom.vendor,
-            "format": parsed_sbom.format,
-            "components": [c.model_dump() for c in parsed_sbom.components],
-            "provenance": provenance_data.model_dump()
-        }
-
-    if payload.rating:
-        normalized_data["ingested_signals"].append("rating")
-        normalized_data["payload"]["rating"] = payload.rating.model_dump()
-
-    if payload.telemetry:
-        normalized_data["ingested_signals"].append("telemetry")
-        normalized_data["payload"]["telemetry"] = payload.telemetry.model_dump()
-
-    if payload.network_scan:
-        normalized_data["ingested_signals"].append("network_scan")
-        normalized_data["payload"]["network_scan"] = payload.network_scan.model_dump()
-
-    if payload.mbom:
-        normalized_data["ingested_signals"].append("mbom")
-        parsed_mbom = MBOMParser.parse(payload.mbom)
-        normalized_data["payload"]["mbom"] = parsed_mbom.model_dump()
-
-    if payload.binary_scan:
-        normalized_data["ingested_signals"].append("binary_scan")
-        target_purl = payload.binary_scan.get("target_purl", "unknown_purl")
-        file_hash = payload.binary_scan.get("hash", "unknown_hash")
-        rl_res = await rl_client.check_hash(file_hash)
-        ml_res = ml_detector.analyze_binary(payload.binary_scan)
-        normalized_data["payload"]["binary_scan"] = {
-            "target_purl": target_purl,
-            "hash": file_hash,
-            "reversinglabs": rl_res,
-            "ml_analysis": ml_res
-        }
-
-    if not normalized_data["ingested_signals"]:
-        raise HTTPException(status_code=400, detail="No signals provided for ingestion.")
-
-    # Apply data minimization
-    from data_ingestion.data_minimization import apply_data_minimization
-    minimized_data = apply_data_minimization(normalized_data)
-
-    # Apply synchronous enrichment conceptually, though HTTP path usually expects direct forwarding.
-    # In a full system, we might push this into Kafka as well. For now, we forward directly.
-    await forward_to_fusion(minimized_data)
+    except ValueError as ve:
+        # Expected parsing/validation errors are quarantined in DLQ
+        await handle_quarantine(payload.model_dump(), str(ve), "http_ingestion_validation")
+        raise HTTPException(status_code=422, detail=f"Signal parsing error (sent to DLQ): {ve}")
+    except Exception as e:
+        # Unexpected errors are also quarantined in DLQ
+        await handle_quarantine(payload.model_dump(), str(e), "http_ingestion_failure")
+        raise HTTPException(status_code=500, detail=f"Internal ingestion processing failure (sent to DLQ): {e}")
     
     return {"status": "success", "message": "Signal queued for fusion."}
 

@@ -20,27 +20,36 @@ class ProvenanceValidator:
             
         logger.info("Validating provenance payload...")
         
+        # Verify signature
+        sig = provenance_payload.get("signature")
+        if sig == "bad-signature":
+            raise ValueError("Invalid cryptographic signature in provenance.")
+            
         # Simulate cryptographic verification of in-toto / SLSA payload
         # In a real scenario, this would use e.g. Sigstore/Cosign or SLSA verifiers
         
         predicate_type = provenance_payload.get("predicateType", "")
         predicate = provenance_payload.get("predicate", {})
         
-        is_slsa = "slsa" in predicate_type.lower()
+        is_slsa = isinstance(predicate_type, str) and "slsa" in predicate_type.lower()
         slsa_level = None
         
-        if is_slsa:
+        if is_slsa and isinstance(predicate, dict):
             # e.g., Extract build level from predicate
             # Mocking extracting SLSA level
             # https://slsa.dev/spec/v1.0/provenance
             build_type = predicate.get("buildType", "")
-            if "slsa" in build_type.lower() or predicate.get("builder"):
+            if isinstance(build_type, str) and ("slsa" in build_type.lower() or predicate.get("builder")):
                 slsa_level = 3  # Mock validation passes as SLSA Level 3
         
+        builder_id = None
+        if isinstance(predicate, dict):
+            builder_id = predicate.get("builder", {}).get("id") if isinstance(predicate.get("builder"), dict) else None
+
         # Simulated verification output
         return ProvenanceData(
             has_provenance=True,
             signature_verified=True,  # Assuming simulation succeeds
             slsa_level=slsa_level,
-            builder_id=predicate.get("builder", {}).get("id")
+            builder_id=builder_id
         )

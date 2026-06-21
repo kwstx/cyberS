@@ -12,3 +12,4 @@ resources:
 - redis-deployment.yaml
 - autoscaling.yaml
 - keda-serverless.yaml
+- ha-failover.yaml

@@ -1,0 +1,53 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: darip-services-failover
+  namespace: darip
+spec:
+  host: "*.darip.svc.cluster.local"
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_CONN
+      localityLbSetting:
+        enabled: true
+        failover:
+          - from: us-east
+            to: eu-west
+          - from: eu-west
+            to: us-east
+    connectionPool:
+      tcp:
+        maxConnections: 4096
+      http:
+        http1MaxPendingRequests: 1024
+        maxRequestsPerConnection: 128
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: global-ingest-failover
+  namespace: darip
+spec:
+  hosts:
+    - "ingest.darip.global"
+  gateways:
+    - darip-gateway
+  http:
+    - route:
+        - destination:
+            host: data-ingestion-service.darip.svc.cluster.local
+            subset: primary
+          weight: 90
+        - destination:
+            host: data-ingestion-service.darip.svc.cluster.local
+            subset: secondary
+          weight: 10
+      retries:
+        attempts: 3
+        perTryTimeout: 2s
+        retryOn: "gateway-error,connect-failure,refused-stream"
