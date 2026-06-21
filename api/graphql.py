@@ -1,3 +1,4 @@
+import enum
 import strawberry
 from typing import List, Optional
 from core.models import AssetType
@@ -5,7 +6,7 @@ from datetime import datetime
 
 # Convert Enum for Strawberry
 @strawberry.enum
-class GQLAssetType(strawberry.Enum):
+class GQLAssetType(enum.Enum):
     IP = "ipv4-addr"
     DOMAIN = "domain-name"
     CERTIFICATE = "x509-certificate"
