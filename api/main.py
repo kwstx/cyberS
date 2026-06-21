@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 
-from api.routers import assets, scans, insights, exports
+from api.routers import assets, scans, insights, exports, developer_portal
 from connectors.webhooks import receiver as webhooks_router
 from api.events import publisher
 from core.observability import setup_observability
@@ -65,6 +65,7 @@ app.include_router(scans.router)
 app.include_router(insights.router)
 app.include_router(exports.router)
 app.include_router(webhooks_router.router)
+app.include_router(developer_portal.router)
 
 graphql_app = GraphQLRouter(schema)
 app.include_router(graphql_app, prefix="/graphql")
