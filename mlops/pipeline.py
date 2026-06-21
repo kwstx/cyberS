@@ -2,6 +2,7 @@ import logging
 import os
 import time
 import mlflow
+import wandb
 from typing import Dict, Any, List
 
 from mlops.evaluation import ModelEvaluator
@@ -31,6 +32,9 @@ class ContinuousPipeline:
         mlflow.set_tracking_uri("sqlite:///mlflow.db")
         mlflow.set_experiment(self.experiment_name)
         logger.info(f"Initialized Continuous Pipeline. MLflow tracking URI: {mlflow.get_tracking_uri()}")
+        
+        # We configure wandb to run offline to avoid requiring an API key for demonstration
+        os.environ["WANDB_MODE"] = "offline"
 
     def run_training_cycle(self, num_models: int = 3, epochs_per_phase: int = 2):
         """
@@ -52,6 +56,13 @@ class ContinuousPipeline:
         models = []
         
         with mlflow.start_run(run_name=f"Ensemble_Run_{int(time.time())}") as run:
+            # Initialize wandb run
+            wandb.init(project="DARIP_Continuous_Evaluation", name=run.info.run_name, config={
+                "num_models": num_models,
+                "epochs_per_phase": epochs_per_phase,
+                "dataset_size": len(dataset)
+            })
+            
             mlflow.log_param("num_models", num_models)
             mlflow.log_param("epochs_per_phase", epochs_per_phase)
             mlflow.log_param("dataset_size", len(dataset))
@@ -90,13 +101,18 @@ class ContinuousPipeline:
             metrics = self.evaluator.evaluate_offline(np.array(val_labels), np.array(val_preds))
             
             # Log metrics to MLflow
-            mlflow.log_metrics({
+            mlflow_metrics = {
                 "val_precision": metrics["precision"],
                 "val_recall": metrics["recall"],
                 "val_f1_score": metrics["f1_score"],
                 "val_roc_auc": metrics["roc_auc"],
                 "val_brier_score": metrics["brier_score"]
-            })
+            }
+            mlflow.log_metrics(mlflow_metrics)
+            
+            # Sync to WandB
+            wandb.log(mlflow_metrics)
+            wandb.finish()
             
             # Log the model
             # MLflow pytorch flavor requires tracing or scripting for complex models, 
