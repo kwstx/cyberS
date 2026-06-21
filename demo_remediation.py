@@ -27,7 +27,17 @@ def main():
     }
 
     result = engine.process_insight(critical_insight)
-    print(f"Result: {result}")
+    print(f"Initial Result: {result}")
+    
+    if result.startswith("AWAITING_APPROVAL"):
+        execution_id = result.split(":")[1]
+        print(f"\n[+] Analyst reviews the alert context... and approves.")
+        res1 = engine.approve_action(execution_id, "SOC_ANALYST")
+        print(f"SOC Approval Result: {res1}")
+        
+        print(f"\n[+] Legal reviews the impact... and approves.")
+        res2 = engine.approve_action(execution_id, "LEGAL")
+        print(f"Legal Approval Result: {res2}")
 
     print("\n--- Scenario 2: High Severity Insight triggering Guided Workflow ---")
     high_insight = {
@@ -71,7 +81,13 @@ def main():
     engine.policy_engine.q_table[state_key] = {"pb_soar_escalation": 1.0}
 
     result = engine.process_insight(complex_insight)
-    print(f"Execution Result: {result}")
+    print(f"Initial Result: {result}")
+    
+    if result.startswith("AWAITING_APPROVAL"):
+        execution_id = result.split(":")[1]
+        print(f"\n[+] SOC Analyst reviews the context... determines it's a false positive, and rejects it.")
+        res = engine.reject_action(execution_id, "SOC_ANALYST", reason="False positive based on recent configuration change.")
+        print(f"Rejection Result: {res}")
 
 if __name__ == "__main__":
     main()

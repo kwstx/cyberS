@@ -1,5 +1,6 @@
 import logging
-from typing import Dict, Any, Optional
+import uuid
+from typing import Dict, Any, Optional, Set
 
 from remediation.playbook_manager import PlaybookManager, Playbook
 from remediation.policies.rl_policy import RLPolicyEngine
@@ -26,6 +27,9 @@ class RemediationEngine:
         
         # Keep track of active workflows
         self.active_workflows: Dict[str, GuidedWorkflow] = {}
+        
+        # Keep track of playbooks awaiting human/legal approval
+        self.pending_approvals: Dict[str, Dict[str, Any]] = {}
 
     def simulate_insight(self, insight: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -88,6 +92,18 @@ class RemediationEngine:
         
         # Execute playbook
         if selected_pb.pb_type == "automated":
+            if getattr(selected_pb, "requires_approval", False):
+                execution_id = str(uuid.uuid4())
+                roles_req = set(getattr(selected_pb, "approval_roles", []) or ["SOC_ANALYST"])
+                self.pending_approvals[execution_id] = {
+                    "insight": insight,
+                    "playbook": selected_pb,
+                    "roles_approved": set(),
+                    "roles_required": roles_req
+                }
+                logger.info(f"Playbook {selected_pb.name} requires approval. Pending execution {execution_id}. Required roles: {roles_req}")
+                return f"AWAITING_APPROVAL:{execution_id}"
+                
             success = self._execute_automated_playbook(selected_pb, insight)
             # Update policy based on success
             self.policy_engine.update_policy(insight, selected_pb.pb_id, success)
@@ -130,3 +146,39 @@ class RemediationEngine:
 
     def get_workflow(self, workflow_id: str) -> Optional[GuidedWorkflow]:
         return self.active_workflows.get(workflow_id)
+
+    def approve_action(self, execution_id: str, approver_role: str) -> str:
+        """
+        Authorize a pending remediation action (SOC Analyst, Legal, etc.)
+        """
+        if execution_id not in self.pending_approvals:
+            return "NOT_FOUND"
+            
+        pending = self.pending_approvals[execution_id]
+        if approver_role in pending["roles_required"]:
+            pending["roles_approved"].add(approver_role)
+            logger.info(f"Approval received from {approver_role} for execution {execution_id}.")
+            
+            # Check if fully approved
+            if pending["roles_required"].issubset(pending["roles_approved"]):
+                logger.info(f"All required approvals met for execution {execution_id}. Executing playbook.")
+                success = self._execute_automated_playbook(pending["playbook"], pending["insight"])
+                self.policy_engine.update_policy(pending["insight"], pending["playbook"].pb_id, success)
+                del self.pending_approvals[execution_id]
+                return "AUTOMATED_SUCCESS" if success else "AUTOMATED_FAILED"
+            else:
+                remaining = pending["roles_required"] - pending["roles_approved"]
+                return f"AWAITING_FURTHER_APPROVAL (Remaining: {', '.join(remaining)})"
+                
+        return "INVALID_ROLE"
+
+    def reject_action(self, execution_id: str, approver_role: str, reason: str) -> str:
+        """
+        Reject a pending remediation action.
+        """
+        if execution_id not in self.pending_approvals:
+            return "NOT_FOUND"
+            
+        logger.warning(f"Action {execution_id} rejected by {approver_role}. Reason: {reason}")
+        del self.pending_approvals[execution_id]
+        return "REJECTED"

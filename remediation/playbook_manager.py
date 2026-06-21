@@ -4,12 +4,14 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 class Playbook:
-    def __init__(self, pb_id: str, name: str, pb_type: str, match_rules: Dict[str, Any], steps: List[Dict[str, Any]]):
+    def __init__(self, pb_id: str, name: str, pb_type: str, match_rules: Dict[str, Any], steps: List[Dict[str, Any]], requires_approval: bool = False, approval_roles: List[str] = None):
         self.pb_id = pb_id
         self.name = name
         self.pb_type = pb_type  # 'automated' or 'guided'
         self.match_rules = match_rules
         self.steps = steps
+        self.requires_approval = requires_approval
+        self.approval_roles = approval_roles or []
 
     def matches(self, insight: Dict[str, Any]) -> bool:
         """
@@ -42,7 +44,9 @@ class PlaybookManager:
                 match_rules={"severity": "critical", "type": "vulnerability"},
                 steps=[
                     {"action": "network_segmentation", "params": {"isolation_level": "strict"}}
-                ]
+                ],
+                requires_approval=True,
+                approval_roles=["SOC_ANALYST", "LEGAL"]
             ),
             Playbook(
                 pb_id="pb_patch_guidance_01",
@@ -70,7 +74,9 @@ class PlaybookManager:
                 match_rules={"severity": "critical", "type": "complex_incident"},
                 steps=[
                     {"action": "soar_integration", "params": {"platform": "Cortex XSOAR", "escalation_level": "critical"}}
-                ]
+                ],
+                requires_approval=True,
+                approval_roles=["SOC_ANALYST"]
             ),
             Playbook(
                 pb_id="pb_supply_chain_comm",
