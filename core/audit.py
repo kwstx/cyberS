@@ -1,5 +1,6 @@
 import structlog
 from typing import Any, Dict
+from governance.audit_ledger import audit_ledger
 
 # Create a dedicated structured logger for audit events
 audit_logger = structlog.get_logger("AuditLogger")
@@ -24,4 +25,8 @@ class AuditEvent:
         if details:
             payload["details"] = details
             
+        # Log to structlog for observability/SIEM
         audit_logger.info("audit_event", **payload)
+        
+        # Append to the cryptographic immutable ledger for compliance
+        audit_ledger.append_event(payload)

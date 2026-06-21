@@ -40,6 +40,8 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+from governance.rbac import FineGrainedRBAC
+
 class RoleChecker:
     def __init__(self, allowed_roles: List[str]):
         self.allowed_roles = allowed_roles
@@ -51,4 +53,20 @@ class RoleChecker:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operation not permitted"
+        )
+
+class PermissionChecker:
+    """
+    FastAPI dependency to enforce fine-grained action and resource permissions.
+    """
+    def __init__(self, action: str, resource: str = "*"):
+        self.action = action
+        self.resource = resource
+
+    def __call__(self, user: User = Depends(get_current_user)):
+        if FineGrainedRBAC.is_authorized(user.roles, self.action, self.resource):
+            return user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Operation not permitted: missing '{self.action}' on '{self.resource}'"
         )
