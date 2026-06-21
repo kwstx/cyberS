@@ -62,6 +62,33 @@ class PlaybookManager:
                 steps=[
                     {"step_id": "step_1", "instruction": "Review the risk insight.", "requires_evidence": False}
                 ]
+            ),
+            Playbook(
+                pb_id="pb_soar_escalation",
+                name="Complex Incident SOAR Escalation",
+                pb_type="automated",
+                match_rules={"severity": "critical", "type": "complex_incident"},
+                steps=[
+                    {"action": "soar_integration", "params": {"platform": "Cortex XSOAR", "escalation_level": "critical"}}
+                ]
+            ),
+            Playbook(
+                pb_id="pb_supply_chain_comm",
+                name="Vendor Breach Notification",
+                pb_type="automated",
+                match_rules={"severity": ["high", "critical"], "type": "supply_chain_breach"},
+                steps=[
+                    {"action": "vendor_communication", "params": {"template_type": "breach_notification"}}
+                ]
+            ),
+            Playbook(
+                pb_id="pb_supply_chain_controls",
+                name="Apply Compensating Controls for Vendor Portal",
+                pb_type="automated",
+                match_rules={"severity": "high", "type": "vendor_portal_vulnerability"},
+                steps=[
+                    {"action": "compensating_controls", "params": {"control_type": "waf_strict_filtering"}}
+                ]
             )
         ]
         logger.info(f"Loaded {len(self.playbooks)} playbooks.")

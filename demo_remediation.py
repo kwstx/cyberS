@@ -4,6 +4,8 @@ from remediation.workflows.guided_workflow import WorkflowState
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
 
+import json
+
 def main():
     print("\n--- Initializing Remediation Engine ---")
     engine = RemediationEngine()
@@ -16,8 +18,6 @@ def main():
         "asset_id": "10.0.0.101"
     }
     
-    # Since RL policy explores, we'll force it to exploit by setting epsilon=0 
-    # and biasing the Q-table for the automated playbook.
     engine.policy_engine.epsilon = 0.0
     state_key = engine.policy_engine._get_state_key(critical_insight)
     engine.policy_engine.q_table[state_key] = {
@@ -29,7 +29,6 @@ def main():
     result = engine.process_insight(critical_insight)
     print(f"Result: {result}")
 
-
     print("\n--- Scenario 2: High Severity Insight triggering Guided Workflow ---")
     high_insight = {
         "title": "Missing Security Patch",
@@ -40,17 +39,39 @@ def main():
     
     workflow_id = engine.process_insight(high_insight)
     print(f"Workflow ID: {workflow_id}")
+
+    print("\n--- Scenario 3: Pre-Execution Simulation for Supply Chain Incident ---")
+    supply_chain_insight = {
+        "title": "Compromised Vendor Portal",
+        "type": "vendor_portal_vulnerability",
+        "severity": "high",
+        "target_endpoint": "api.vendor.com/v1/auth"
+    }
     
-    workflow = engine.get_workflow(workflow_id)
-    if workflow:
-        print(f"Current State: {workflow.state}")
-        print("Advancing step 1...")
-        workflow.advance()
-        print(f"Current State: {workflow.state}")
-        
-        print("Submitting evidence for step 2...")
-        workflow.submit_evidence("proof_of_patch.jpg")
-        print(f"Current State: {workflow.state}")
+    engine.policy_engine.epsilon = 0.0
+    state_key = engine.policy_engine._get_state_key(supply_chain_insight)
+    engine.policy_engine.q_table[state_key] = {"pb_supply_chain_controls": 1.0}
+
+    sim_result = engine.simulate_insight(supply_chain_insight)
+    print("Simulation Report:")
+    print(json.dumps(sim_result, indent=2))
+    
+    print("\nExecuting the Supply Chain Incident after reviewing simulation...")
+    result = engine.process_insight(supply_chain_insight)
+    print(f"Execution Result: {result}")
+
+    print("\n--- Scenario 4: Complex Incident SOAR Escalation ---")
+    complex_insight = {
+        "title": "Ransomware Lateral Movement",
+        "type": "complex_incident",
+        "severity": "critical"
+    }
+    
+    state_key = engine.policy_engine._get_state_key(complex_insight)
+    engine.policy_engine.q_table[state_key] = {"pb_soar_escalation": 1.0}
+
+    result = engine.process_insight(complex_insight)
+    print(f"Execution Result: {result}")
 
 if __name__ == "__main__":
     main()

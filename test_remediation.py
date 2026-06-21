@@ -55,3 +55,44 @@ def test_guided_workflow_execution(engine):
     
     # Should be completed
     assert workflow.state == WorkflowState.COMPLETED
+
+def test_simulation_capability(engine):
+    insight = {
+        "title": "Supply Chain Breach at Vendor X",
+        "type": "supply_chain_breach",
+        "severity": "critical",
+        "vendor_id": "vendor_x",
+        "vendor_email": "security@vendor_x.com"
+    }
+    
+    # Force RL policy to pick pb_supply_chain_comm
+    engine.policy_engine.epsilon = 0.0
+    state_key = engine.policy_engine._get_state_key(insight)
+    engine.policy_engine.q_table[state_key] = {"pb_supply_chain_comm": 1.0}
+    
+    # Run simulation
+    sim_result = engine.simulate_insight(insight)
+    
+    assert sim_result["status"] == "SIMULATION_SUCCESS"
+    assert sim_result["playbook_selected"] == "Vendor Breach Notification"
+    
+    reports = sim_result["simulation_reports"]
+    assert len(reports) == 1
+    assert reports[0]["action"] == "Vendor Communication"
+    assert "vendor_x" in reports[0]["impact"]
+
+def test_soar_escalation(engine):
+    insight = {
+        "title": "Advanced Persistent Threat Detected",
+        "type": "complex_incident",
+        "severity": "critical"
+    }
+    
+    # Force RL policy to pick pb_soar_escalation
+    engine.policy_engine.epsilon = 0.0
+    state_key = engine.policy_engine._get_state_key(insight)
+    engine.policy_engine.q_table[state_key] = {"pb_soar_escalation": 1.0}
+    
+    result = engine.process_insight(insight)
+    
+    assert result == "AUTOMATED_SUCCESS"

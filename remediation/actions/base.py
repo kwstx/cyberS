@@ -19,3 +19,17 @@ class BaseAutomatedAction(ABC):
             bool: True if successful, False otherwise.
         """
         pass
+
+    @abstractmethod
+    def simulate(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Simulate the automated action to evaluate impact before execution.
+        
+        Args:
+            params: Parameters specified in the playbook step.
+            context: The risk insight context triggering this action.
+            
+        Returns:
+            Dict[str, Any]: A report describing the simulated impact.
+        """
+        pass

@@ -24,3 +24,15 @@ class NetworkSegmentationAction(BaseAutomatedAction):
         
         logger.info(f"Successfully isolated asset {asset_id}.")
         return True
+
+    def simulate(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        asset_id = context.get('asset_id', 'Unknown')
+        isolation_level = params.get('isolation_level', 'standard')
+        
+        return {
+            "action": "Network Segmentation",
+            "target": asset_id,
+            "impact": f"Would isolate asset {asset_id} with level '{isolation_level}'. Connections to/from this asset would be dropped.",
+            "risk_reduction": "High",
+            "business_disruption": "High"
+        }

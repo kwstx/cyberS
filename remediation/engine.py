@@ -4,6 +4,9 @@ from typing import Dict, Any, Optional
 from remediation.playbook_manager import PlaybookManager, Playbook
 from remediation.policies.rl_policy import RLPolicyEngine
 from remediation.actions.network_segmentation import NetworkSegmentationAction
+from remediation.actions.soar_integration import SoarIntegrationAction
+from remediation.actions.vendor_communication import VendorCommunicationAction
+from remediation.actions.compensating_controls import CompensatingControlsAction
 from remediation.workflows.guided_workflow import GuidedWorkflow
 
 logger = logging.getLogger(__name__)
@@ -15,11 +18,56 @@ class RemediationEngine:
         
         # Register automated actions
         self.automated_actions = {
-            "network_segmentation": NetworkSegmentationAction()
+            "network_segmentation": NetworkSegmentationAction(),
+            "soar_integration": SoarIntegrationAction(),
+            "vendor_communication": VendorCommunicationAction(),
+            "compensating_controls": CompensatingControlsAction()
         }
         
         # Keep track of active workflows
         self.active_workflows: Dict[str, GuidedWorkflow] = {}
+
+    def simulate_insight(self, insight: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Simulate processing an insight to evaluate its impact before execution.
+        """
+        logger.info(f"Simulating Insight: {insight.get('title', 'Unknown')}")
+        
+        eligible_playbooks = self.playbook_manager.get_eligible_playbooks(insight)
+        
+        if not eligible_playbooks:
+            return {"status": "NO_PLAYBOOK_FOUND", "simulation_reports": []}
+            
+        # Select best playbook
+        selected_pb = self.policy_engine.select_best_playbook(insight, eligible_playbooks)
+        
+        reports = []
+        if selected_pb.pb_type == "automated":
+            for step in selected_pb.steps:
+                action_name = step.get("action")
+                params = step.get("params", {})
+                action_handler = self.automated_actions.get(action_name)
+                
+                if action_handler:
+                    report = action_handler.simulate(params, insight)
+                    reports.append(report)
+                else:
+                    reports.append({"error": f"Action '{action_name}' not implemented."})
+                    
+        elif selected_pb.pb_type == "guided":
+            reports.append({
+                "action": "Guided Workflow",
+                "target": "Human Operator",
+                "impact": f"Would initiate a step-by-step guided workflow requiring human interaction for playbook: {selected_pb.name}.",
+                "risk_reduction": "Variable (Depends on human execution)",
+                "business_disruption": "Minimal"
+            })
+            
+        return {
+            "status": "SIMULATION_SUCCESS",
+            "playbook_selected": selected_pb.name,
+            "simulation_reports": reports
+        }
 
     def process_insight(self, insight: Dict[str, Any]) -> str:
         """
