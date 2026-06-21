@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package darip;
+
+service AssetService {
+  rpc GetAsset (AssetRequest) returns (AssetResponse);
+  rpc ListAssets (ListAssetsRequest) returns (ListAssetsResponse);
+}
+
+message AssetRequest {
+  string asset_id = 1;
+}
+
+message AssetResponse {
+  string id = 1;
+  string type = 2;
+  string value = 3;
+  string name = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message ListAssetsRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+  string type = 3;
+}
+
+message ListAssetsResponse {
+  repeated AssetResponse assets = 1;
+}

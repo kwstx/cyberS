@@ -6,16 +6,28 @@ from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 
 from api.routers import assets, scans, insights, exports
+from connectors.webhooks import receiver as webhooks_router
 from api.events import publisher
 from core.observability import setup_observability
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from strawberry.fastapi import GraphQLRouter
+from api.graphql import schema
+
 logger = structlog.get_logger("api.main")
+
+limiter = Limiter(key_func=get_remote_address)
 
 app = FastAPI(
     title=settings.APP_NAME,
     description="DARIP API Layer for EASM and Supply Chain Risk",
     version="1.0.0"
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 setup_observability(app, "api_layer")
 
 # CORS Middleware
@@ -52,9 +64,14 @@ app.include_router(assets.router)
 app.include_router(scans.router)
 app.include_router(insights.router)
 app.include_router(exports.router)
+app.include_router(webhooks_router.router)
+
+graphql_app = GraphQLRouter(schema)
+app.include_router(graphql_app, prefix="/graphql")
 
 @app.get("/health")
-async def health_check():
+@limiter.limit("5/minute")
+async def health_check(request: Request):
     return {"status": "ok", "environment": settings.ENVIRONMENT}
 
 if __name__ == "__main__":
