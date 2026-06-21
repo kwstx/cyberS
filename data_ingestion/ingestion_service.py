@@ -169,7 +169,11 @@ async def consume_kafka():
                     "payload": enriched_data
                 }
                 
-                await forward_to_fusion(normalized_data)
+                # Apply data minimization
+                from data_ingestion.data_minimization import apply_data_minimization
+                minimized_data = apply_data_minimization(normalized_data)
+                
+                await forward_to_fusion(minimized_data)
             except Exception as e:
                 logger.error(f"Error processing Kafka message: {e}")
     finally:
@@ -243,9 +247,13 @@ async def ingest_signals(payload: MultiSignalPayload):
     if not normalized_data["ingested_signals"]:
         raise HTTPException(status_code=400, detail="No signals provided for ingestion.")
 
+    # Apply data minimization
+    from data_ingestion.data_minimization import apply_data_minimization
+    minimized_data = apply_data_minimization(normalized_data)
+
     # Apply synchronous enrichment conceptually, though HTTP path usually expects direct forwarding.
     # In a full system, we might push this into Kafka as well. For now, we forward directly.
-    await forward_to_fusion(normalized_data)
+    await forward_to_fusion(minimized_data)
     
     return {"status": "success", "message": "Signal queued for fusion."}
 

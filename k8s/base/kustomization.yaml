@@ -6,5 +6,9 @@ resources:
 - api-deployment.yaml
 - services-deployment.yaml
 - network-policies.yaml
+- redis-network-policy.yaml
 - istio-security.yaml
 - opa-gatekeeper.yaml
+- redis-deployment.yaml
+- autoscaling.yaml
+- keda-serverless.yaml

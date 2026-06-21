@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: darip-redis-cache
+  namespace: darip
+spec:
+  serviceName: "redis-service"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: darip-redis-cache
+  template:
+    metadata:
+      labels:
+        app: darip-redis-cache
+    spec:
+      nodeSelector:
+        environment: public-cloud
+      containers:
+      - name: redis
+        image: redis:7.2-alpine
+        command:
+          - "redis-server"
+          - "--appendonly"
+          - "yes"
+          - "--maxmemory"
+          - "512mb"
+          - "--maxmemory-policy"
+          - "allkeys-lru"
+        ports:
+        - containerPort: 6379
+          name: redis
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: darip
+spec:
+  ports:
+  - port: 6379
+    targetPort: 6379
+    name: redis
+  clusterIP: None # Headless service for StatefulSet
+  selector:
+    app: darip-redis-cache

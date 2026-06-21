@@ -1,0 +1,23 @@
+# Allow Predictive Inference and Semantic Fusion to communicate with Redis Cache
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-cache-ingress
+  namespace: darip
+spec:
+  podSelector:
+    matchLabels:
+      app: darip-redis-cache
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darip-semantic-fusion
+    - podSelector:
+        matchLabels:
+          app: darip-predictive-inference
+    ports:
+    - protocol: TCP
+      port: 6379

@@ -1,0 +1,29 @@
+# Requires KEDA installed in the cluster
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: predictive-inference-scaledobject
+  namespace: darip
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: darip-predictive-inference
+  # Allows scaling to zero for true serverless behaviour
+  minReplicaCount: 0
+  maxReplicaCount: 100
+  cooldownPeriod:  300
+  pollingInterval: 15
+  triggers:
+  # Example: scaling based on a Kafka topic where risk evaluation jobs are queued
+  - type: kafka
+    metadata:
+      bootstrapServers: kafka-service.darip.svc.cluster.local:9092
+      topic: risk-eval-jobs
+      consumerGroup: predictive-inference-group
+      lagThreshold: "10"
+  # Also scale on CPU if queue isn't the only bottleneck
+  - type: cpu
+    metadata:
+      type: Utilization
+      value: "80"

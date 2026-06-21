@@ -160,5 +160,17 @@ Kubernetes clusters enforce security guidelines during pod admission:
 - **Namespace Annotation Enforcement**: Rejects namespaces that do not request Istio proxy injection (`istio-injection: enabled`).
 - **Registry Constraints**: Prevents deployments from running container images from unapproved registries. Only verified sovereign container registries (e.g., `registry.sovereign.local/` and local `darip/` tags) are permitted.
 
-### Horizontal Scalability
-Stateless microservices scale using Horizontal Pod Autoscalers (HPA). The `darip-predictive-inference` service, in particular, is configured with a minimum of 3 and a maximum of 30 replicas, scaling up dynamically when average CPU utilization exceeds 75% to handle bursts of risk assessments.
+### Horizontal Scalability & Serverless Execution
+Stateless microservices scale using a combination of Horizontal Pod Autoscalers (HPA) and Kubernetes Event-driven Autoscaling (KEDA).
+- **HPA**: Core microservices (`semantic-fusion`, `agentic-execution`, `governance`) utilize standard HPA scaled based on CPU utilization metrics.
+- **KEDA**: To handle sudden bursts of risk assessments without incurring baseline costs, the `darip-predictive-inference` service utilizes KEDA `ScaledObjects`. This permits the stateless inference engine to autoscale to zero during idle periods and massively scale up based on event queue lengths (e.g., Kafka lag) or custom metrics.
+
+### Distributed Caching (Redis)
+To optimize the high volume of sub-graph retrievals from the stateful Neo4j store, DARIP incorporates a distributed Redis cache cluster.
+- **Query Caching**: `semantic-fusion` caches recently resolved graphs and risk indices. 
+- **Ephemeral State**: Agents orchestrating complex workflows use Redis to store intermediate state across their executions, maintaining high availability for short-lived tasks.
+
+### Multi-Region Active-Active Deployment
+For disaster recovery and global high availability, DARIP employs a multi-region Active-Active deployment architecture managed via Kustomize overlays.
+- **Region Overlays**: `region-us-east` and `region-eu-west` configurations apply regional labels, availability zones, and specific load-balancer integrations.
+- **Global Traffic Routing**: In cloud environments, global endpoints route traffic to the nearest healthy region. The underlying Neo4j clusters are federated to sync critical risk state asynchronously across geographical boundaries.
